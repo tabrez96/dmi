@@ -1,0 +1,7 @@
+.dmi/
+.dmi-work/
+products/
+.venv/
+__pycache__/
+.env
+design-library/
