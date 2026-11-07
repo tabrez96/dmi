@@ -20,9 +20,12 @@ in `products/<name>/` as **separate git repos** (git-ignored here); never commit
 - One commit per feature. Review fixes are folded into that feature's commit (then force-push the PR branch with a
   lease), never added as a separate "fix" commit.
 - Commit messages and PR titles are plain sentences ("Add the README"), no `feat:` / `docs:` / `chore:` prefixes.
-- Commits are authored as `Tabrez Basha <abtabers@gmail.com>` (set in the local git config). No
+- Commits are authored as `Tabrez Basha <abtabres@gmail.com>` (set in the local git config). No
   `Co-Authored-By: Claude ...`, `Claude-Session:` or other AI-attribution lines in commit messages or PR descriptions.
 - Secrets live only in `.env` (never in chat, config or commits). Agents never see them; the gate holds the keys.
+- Readable names: no one-letter or cryptic variable names (`m`, `k`, `v`, `t`, `p`, `x`, `cfg2`). Name things for what
+  they hold: `member`, `ticket`, `product`, `character`, `message`. Loop variables too (`for key, member in team.items()`).
+  Short names are fine only where the meaning is plain, such as `i` as an index or `e` in `except ... as e`.
 - Tests must pass (`uv run pytest`); the service is `dmi` (`sudo systemctl restart dmi` only when
   `sudo nerdctl ps -q` shows no agent running).
 - Products are referred to by name (`dmi show nudge`); tickets are `T-<n>`; unapproved ideas are `I-<n>`.
