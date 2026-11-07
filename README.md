@@ -19,7 +19,8 @@ Darryl (Engineer), Dwight (QA), Michael (Manager, also the system bot).
 ```
 DISCOVERY   Analyst ⇄ PM (Scout researches first if tagged) → brief → PM approves
 UX          Designer ⇄ PM (screens and logo)       as long as needed → PM approves
-SYSTEM      Architect ⇄ Designer, then ⇄ PM        → PM approves
+SYSTEM      Architect ⇄ Designer, then ⇄ PM        → PM approves the design
+TICKETS     Architect posts the drafted tickets    → PM comments (Architect revises) or approves; then they exist
 BUILD       per ticket: plan (Architect) → Engineer ⇄ QA → Designer review (UI tickets)
             all reviews pass → pull request → CodeRabbit review triaged → PM merges
 STUCK       round limit or a repeated failure → Michael steps in once: fix / ruling / replan / escalate
@@ -143,7 +144,7 @@ directly on the machine instead. That is only for development: it has none of th
 | Stage | Who | What it produces | Moves on when |
 |---|---|---|---|
 | Discovery | Oscar ⇄ PM (Ryan researches first if tagged) | a product brief | PM approves |
-| UX | Pam ⇄ PM | the product's git repo; `design/ux.md`, the logo (`design/brand/logo.svg` and `mark.svg`, drawn as SVG; HQ renders `logo.png`) and screens `S01`, `S02`... as HTML mockups | PM approves the UX and logo together |
+| UX | Pam ⇄ PM | the product's git repo; `design/ux.md`, the logo (`design/brand/logo.svg` and `mark.svg`, drawn as SVG; HQ renders `logo.png`, and Pam looks at that render and fixes the logo up to `roles.designer.logo_review_rounds` (2) times before you see it) and screens `S01`, `S02`... as HTML mockups | PM approves the UX and logo together |
 | System | Jim ⇄ Pam, then Jim ⇄ PM | `design/system.md` and the tickets | PM approves |
 | Build (per ticket) | Jim plans → Darryl ⇄ Dwight → Pam (UI tickets) | one squashed commit, a PR into `develop`, CodeRabbit's comments triaged by Jim | PM merges |
 | Launch | PM | `master` fast-forwarded to `develop` and tagged `v<n>` | — |
@@ -170,7 +171,7 @@ parallel without touching each other. Darryl can ask Jim or Pam questions mid-bu
 
 ```
 hq/             board, policy, orchestrator, harness, Discord bot, CLI
-agents/<role>/  charter.md per role; _conversation.md is shared
+agents/<role>/  charter.md per role; shared rules: _pipeline-turn.md (real work), _discord-chat.md (chat), _shared.md (both)
 company/        handbook, spec, decisions; every agent reads these
 config/dmi.yaml models per role, round limits, gates, budgets, Discord channels
 deploy/ sandbox/  systemd service, microVM image and firewall
@@ -219,7 +220,7 @@ One bot per crew member. Michael's bot also runs the server layout, approval but
 3. `uv run dmi doctor` prints each bot's invite link; then run `uv run dmi discord`.
 
 Talk to the crew with `@Name ...` or by DM. Reply in a thread to steer work; buttons handle approvals.
-Slash commands: `/discover`, `/new <product> <title>`, `/change`, `/digest`, `/screens`, `/crew`, `/inbox`.
+Slash commands: `/discover`, `/new <product> <title>`, `/change` (`designer:true` for design work), `/digest`, `/screens`, `/crew`, `/inbox`.
 
 ## How a new product reaches GitHub
 
@@ -229,11 +230,14 @@ Every product has its own GitHub repo before anything is built, and CodeRabbit r
 2. Jim asks the PM for an **empty** GitHub repo. Paste its link in the product's thread and HQ connects it. Only the
    first commit (`.gitignore`) is pushed straight to `develop` and `master`, and `develop` becomes the default branch.
 3. The README, then the brief, UX spec, logo and screens, are opened as **pull requests** into `develop`
-   (`dmi/setup-readme`, `dmi/setup-design`). The PM reviews them there and merges them in that order; README
-   changes are asked for in a comment.
-4. Until both are merged, **Approve & build** is hidden and refused. When they are merged HQ brings its local
+   (`dmi/setup-readme`, `dmi/setup-design`). The PM reviews them there and merges them in that order; HQ doesn't
+   read comments on them yet, so changes are made on GitHub.
+4. Until both are merged, **Approve design** is hidden and refused. When they are merged HQ brings its local
    `develop` up to date and posts the Approve button again.
-5. After that, every ticket is a pull request the PM reviews. If CodeRabbit hasn't looked at the setup pull requests after
+5. After the design is approved, Jim posts the drafted tickets in the thread (build order, dependencies, acceptance
+   criteria). Nothing is created yet. Comment in the thread and he revises the list and posts it again; approve and
+   the tickets are created and the build starts.
+6. After that, every ticket is a pull request the PM reviews. If CodeRabbit hasn't looked at the setup pull requests after
    ten minutes, HQ tells the PM to install the CodeRabbit app on the repo.
 
 Switch the pull-request setup off with `github.setup_prs: false` (the whole history is pushed directly instead).
@@ -244,6 +248,16 @@ Every product gets its own channel the moment it exists (`#idea-5` until the PM 
 the pinned checklist, a **Pipeline** thread (the crew's turns and the gates with their buttons; what the PM writes there steers
 the work) and one thread per ticket (🔧 working, 🔔 waiting on the PM, ⛔ blocked, ✅ shipped). Chat with the crew
 in the channel itself. Tickets always belong to a product (HQ refuses one that doesn't), so `#tickets` only holds the old ones. Ideas start in `#ideas`, a private forum for the PM, Oscar and Ryan.
+
+## The crew's characters
+
+Each crew member talks like their character from The Office: Dwight is blunt and rule-obsessed, Pam is sweet and a little
+apologetic, Michael is the funniest one in the room, Jim is deadpan, Oscar corrects people, Ryan has a buzzword for
+everything, Darryl keeps it short and practical. It shows in Discord chat and in the note each one posts in a pipeline
+thread. It doesn't touch anything the products contain: briefs, specs, plans, reports, code and commit messages stay plain.
+The characters are the `vibe` lines in `config/dmi.yaml`, with shared guard rails in `hq/team.py`: facts, verdicts and
+numbers stay exact, the PM is never insulted, jabs at teammates stay affectionate and PG, and anything urgent is said
+straight first. `chat.character: false` turns the voices down to a light touch.
 
 ## Finding what's stuck
 
@@ -282,21 +296,30 @@ the screens; `/change` with `ui:false` files one with no screen:
   change, and the button says **Create ticket** instead of **Send to Pam** once the product is past design.
 - Or use `/change` (optional): `/change product:Nudge what:"..."`, with `ui:false` for a change with no screen.
 
-## Pull requests and CodeRabbit
+**Design work goes to Pam.** A new logo, a redesigned screen or a UX spec change is design, not code. File it with
+`/change ... designer:true` (or `dmi new <product> <title> --designer`). Pam builds it in the design library, on the
+ticket's branch (`design/`): no plan and no QA, because there is no code to test. For a logo she looks at HQ's render
+first (see the UX stage), then HQ opens the pull request, with the logo image in the ticket thread, and it comes to
+the PM like any other. It waits its turn like any other ticket (`build.one_at_a_time`). The code that follows from
+the design (for example building the app icon from the new mark) is a separate ticket for the engineer.
+
+## Pull requests, CodeRabbit and Kody
 
 Each ticket that passes QA becomes a pull request into `develop`. The PM gets a **Ship it** gate, or merges it on
 GitHub and HQ notices.
 
-While a PR waits for the PM, HQ watches for CodeRabbit's review. Jim triages the comments against the code, the plan
+While a PR waits for the PM, HQ watches for the automated reviewers: CodeRabbit and Kody (`github.kody`, the Kodus
+reviewer, as `kody-ai[bot]`). Jim triages their comments together against the code, the plan
 and the design: real bugs and missed acceptance criteria go to Darryl (then Dwight re-checks and HQ pushes to the
 same branch); style, speculation and anything that contradicts the design are skipped, and Jim's reason is posted
-as a reply in that comment's thread. Each ticket gets at most `github.coderabbit.max_rounds` (2) fix rounds;
-after that the comments are left for the PM.
+as a reply in that comment's thread. Kody's inline comments are its findings; its summary only counts when it
+carries findings and no inline comment does. Each ticket gets at most `github.coderabbit.max_rounds` (2) fix rounds
+across both reviewers; after that the comments are left for the PM. Set `github.kody.enabled: false` to ignore Kody.
 
 ### Commenting on the PR yourself
 
 The PM can review on GitHub too. Inline comments, review comments and plain comments from the PM on a PR that is waiting for
-the PM take the same path as CodeRabbit's: Jim triages them against the code, the plan and the design (leaning towards
+the PM take the same path as the reviewers': Jim triages them against the code, the plan and the design (leaning towards
 fixing, since they are the PM's), Darryl fixes what he decides is worth it, Dwight re-checks, and the same PR is
 updated. Whatever Jim skips gets his reason as a reply in that comment's thread. HQ comments on the PR when it
 picks the PM's comments up and when it has pushed the fixes. It reads the PR by webhook (the same one as for builds,
@@ -348,7 +371,8 @@ LAN address only, never `0.0.0.0` (that would open it to the agent VMs). Caddy p
 | `/` | the public website (`hq/site/`; avatars come from Discord with `dmi avatars`) |
 | `/status` | live board: what each crew member is doing now, what waits on the PM, tickets |
 | `/design/` | the design gallery: every product's screens, logo and specs, read straight from each product's `design/` folder (there is no second copy) |
-| `/dashboard` | the one dashboard (redirects to the Grafana page). At the bottom a locked Logs card has a "Log in to view logs" button: `/dashboard/login` takes the password (`DMI_PRIVATE_PASSWORD`, else `GRAFANA_ADMIN_PASSWORD` from `.env`), from anywhere, including through the Cloudflare tunnel (the password must be at least 12 characters or the login stays switched off; the cookie is `Secure` over https; five wrong tries lock a visitor out for ten minutes, and 25 from anyone lock everyone out for ten minutes), and the card turns into the live log |
+| `/dashboard` | the one dashboard (redirects to the Grafana page). At the bottom a locked card has a "Log in to view them" button for the spend breakdowns: `/dashboard/login` takes the password (`DMI_PRIVATE_PASSWORD`, else `GRAFANA_ADMIN_PASSWORD` from `.env`), from anywhere, including through the Cloudflare tunnel (the password must be at least 12 characters or the login stays switched off; the cookie is `Secure` over https; five wrong tries lock a visitor out for ten minutes, and 25 from anyone lock everyone out for ten minutes). Once logged in the card turns into the spend panels and a **Log explorer →** button appears |
+| `/dashboard/logs` | the log explorer, behind the same login: everything HQ did (runs, VMs, ticket changes, messages, proposals and every API call the agents make through the gate) as a readable table, with a time range, filters (kind, crew member, model, T-/I- reference, free text, only trouble), a chart of activity over time (click a bar to zoom in), full records on click and a JSON download |
 | `/activity` | same as `/dashboard`: public Grafana charts: runs, agents running at once, failures, ticket activity (counts, timings and two spend totals; no per-person or per-model spend, model names or message text) |
 
 **Activity log.** `observability:` in the config turns on two things in HQ: a JSON line per event (run start/end, VM run,
@@ -359,7 +383,7 @@ still shows only agents), then share the public dashboard with `set -a; . ./.env
 VictoriaLogs listens on 127.0.0.1:9428; Grafana on the LAN address, port 3000, path `/activity/` (log in as `admin`, password
 `GRAFANA_ADMIN_PASSWORD` in `.env`). There is one dashboard, `dmi-crew`. The dashboard
 server forwards only that dashboard, its static files and its data queries. The panels with ids from 91 up (spend per day,
-crew member, ticket and PR, the models table) and the Logs panel (id 99) are for the operator: dmi removes them from the
+crew member, ticket and PR, the models table) are for the operator: dmi removes them from the
 dashboard, and refuses their queries, unless the viewer logged in at `/dashboard/login`; everyone else sees a
 locked card (id 98). Edit the dashboard in `deploy/obs/make_dashboards.py` and re-run it (new operator-only panels need an
 id of 90 or more). `dmi` replays the existing board history into VictoriaLogs only when asked
