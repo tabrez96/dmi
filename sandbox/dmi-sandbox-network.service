@@ -1,0 +1,16 @@
+[Unit]
+Description=Dunder Mifflin: lock down the agent microVM network (only the gate is reachable)
+Wants=network-online.target
+After=network-online.target containerd.service docker.service
+Before=multi-user.target
+
+[Service]
+# No ExecStop: stopping or restarting the service must never open the network, even for a moment. `up` replaces
+# the rules in place; run `network.sh down` by hand (with no VMs running) to really remove them.
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/dmi-sandbox-network up
+ExecReload=/usr/local/sbin/dmi-sandbox-network up
+
+[Install]
+WantedBy=multi-user.target
