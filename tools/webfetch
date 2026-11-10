@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+"""Fetch a public web page as plain text.  Usage: webfetch URL [max_chars]"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import _web
+
+if len(sys.argv) < 2:
+    sys.exit(__doc__)
+try:
+    limit = int(sys.argv[2]) if len(sys.argv) > 2 else 15000
+except ValueError:
+    sys.exit(f"{os.path.basename(sys.argv[0])}: max_chars must be a whole number\n\n{__doc__}")
+try:
+    print(_web.via_gate("fetch", {"url": sys.argv[1], "max": limit}) if os.environ.get("DMI_GATE")
+          else _web.fetch(sys.argv[1], limit))
+except _web.WebError as e:
+    sys.exit(f"webfetch: {e}")
