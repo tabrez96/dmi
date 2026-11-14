@@ -457,10 +457,12 @@ class Board:
         with self._conn() as conn:
             conn.execute("UPDATE runs SET ended = ?, ok = ?, cost_usd = ? WHERE id = ?",
                       (now, int(ok), cost_usd, run_id))
-            row = conn.execute("SELECT role, model, started FROM runs WHERE id = ?", (run_id,)).fetchone()
+            row = conn.execute("SELECT role, model, started, subject, subject_id FROM runs WHERE id = ?",
+                               (run_id,)).fetchone()
         if row:
             self._emit("run_end", run=run_id, role=row["role"], model=row["model"], ok=int(ok), cost_usd=cost_usd,
-                       duration_s=round(now - row["started"], 1), running=self._running())
+                       duration_s=round(now - row["started"], 1), running=self._running(), subject=row["subject"],
+                       subject_id=row["subject_id"])
 
     def close_orphan_runs(self):
         """Runs still open when HQ starts belong to a previous HQ that crashed or was stopped: close them as failed."""
