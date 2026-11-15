@@ -1,5 +1,7 @@
 # Dunder Mifflin
 
+Website: [dmi.tabrez.xyz](https://dmi.tabrez.xyz) · see what the crew is building, live.
+
 A company of AI agents, run by one person: the PM (the operator, who owns this system). Agents talk to each other in
 turn-based conversations; after 3 rounds without agreement, HQ tags the PM.
 

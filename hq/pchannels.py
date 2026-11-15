@@ -112,8 +112,8 @@ def checklist(product, tickets, names):
         ("Brief approved", stage >= 2, False),
         (f"UX designed by {crew['designer']} (screens in the design library)", stage >= 3, False),
         ("**You:** review and approve the UX", stage >= 4, product["state"] == "ux_review"),
-        (f"System design and tickets by {crew['architect']}", stage >= 5, False),
-        ("**You:** review and approve the design", stage >= 6, product["state"] == "design_review"),
+        (f"The build plan and its drafted tickets by {crew['architect']}", stage >= 5, False),
+        ("**You:** review and approve the plan", stage >= 6, product["state"] == "design_review"),
         (f"**You:** go through the tickets {crew['architect']} drafted, comment or approve", stage >= 7,
          product["state"] == "ticket_review"),
         (f"{build} ({crew['engineer']} builds, {crew['qa']} tests, {crew['designer']} checks screens)", stage >= 8, False),
@@ -130,8 +130,8 @@ def checklist(product, tickets, names):
         "ux_designing": f"{crew['designer']} is designing the UX. You'll get the screens here with a button to approve.",
         "ux_review": f"The UX is ready. Look at the screens, then approve it or tell {crew['designer']} what to change "
                      f"(for example \"S02: ...\").",
-        "designing": f"{crew['architect']} is writing the system design and splitting the work into tickets.",
-        "design_review": f"The design is ready. Approve it to get the drafted tickets, or tell {crew['architect']} what to change.",
+        "designing": f"{crew['architect']} is writing the build plan and splitting the work into tickets.",
+        "design_review": f"The plan is ready. Approve it to get the drafted tickets, or tell {crew['architect']} what to change.",
         "ticket_review": f"{crew['architect']} drafted the tickets above. Comment in this thread (split, merge, reorder, drop, "
                          "add) and he revises them, or approve to start building.",
         "building": f"{crew['engineer']} builds ticket by ticket and {crew['qa']} tests them (each ticket has a thread in this channel). "

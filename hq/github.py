@@ -142,6 +142,21 @@ class GitHub:
         pr = self._call("GET", f"/repos/{slug}/pulls/{number}")
         return "merged" if pr.get("merged") else pr["state"]
 
+    def pr_head(self, slug, number):
+        """The commit a pull request's branch points at now."""
+        return self._call("GET", f"/repos/{slug}/pulls/{number}")["head"]["sha"]
+
+    def review_finished(self, slug, sha, context="CodeRabbit"):
+        """Did `context` (CodeRabbit's commit status) finish reviewing this commit? Rate limited or in progress isn't."""
+        mine, page = [], 1
+        while not mine:                                  # statuses come in pages; read on until CodeRabbit's or the end
+            statuses = self._call("GET", f"/repos/{slug}/commits/{sha}/status?per_page=100&page={page}").get("statuses") or []
+            mine = [status for status in statuses if status.get("context") == context]
+            if len(statuses) < 100:
+                break
+            page += 1
+        return bool(mine) and mine[0].get("state") == "success" and "completed" in (mine[0].get("description") or "").lower()
+
     def merge_pr(self, slug, number, title, method="rebase"):
         """Rebase (default) or squash: the branch is already one commit, so either leaves a linear history with
         no merge commit. 'rebase' keeps the engineer as the commit's author."""
@@ -258,6 +273,22 @@ class GitHub:
         inline = self._list(f"/repos/{slug}/pulls/{number}/comments?per_page=100")
         return any((item.get("user") or {}).get("login") == bot for item in reviews + comments + inline)
 
+    def review_stalled(self, slug, number, bot):
+        """When `bot`'s (CodeRabbit's) review of a PR is held up, the ISO time it last said so, else None: its summary
+        comment still says "rate limited" or "review in progress", or it answered a request to review with "Action not
+        completed". The summary is edited in place, so the marker goes once a review gets through."""
+        said = [comment for comment in self._list(f"/repos/{slug}/issues/{number}/comments?per_page=100")
+                if (comment.get("user") or {}).get("login") == bot]
+        if not said:
+            return None
+        newest = max(said, key=lambda comment: comment["created_at"])
+        summary = next((comment for comment in said if _SUMMARY in (comment.get("body") or "")), None)
+        held = bool(summary and _HELD_UP.search(summary["body"]))
+        refused = "Action not completed" in (newest.get("body") or "")
+        if refused and (held or not summary or summary["updated_at"] <= newest["updated_at"]):
+            return newest["updated_at"]                 # unless a review got through after that refusal
+        return summary["updated_at"] if held else None
+
     def review_after(self, slug, number, bot, after=0):
         """The newest review of a PR by `bot` with an id above `after`: (id, body, [inline comments]) or None.
         Comments are the review's own inline comments, each {"comment_id", "where", "body"}, cleaned of the bot's markup."""
@@ -330,6 +361,8 @@ def log_excerpt(text, limit=3500):
 
 
 HQ_MARK = "<!-- dmi -->"       # on everything HQ writes to a PR, so it never reads its own words as yours
+_SUMMARY = "auto-generated comment: summarize by coderabbit.ai"      # CodeRabbit's walkthrough comment
+_HELD_UP = re.compile(r"auto-generated comment: (?:rate limited|review in progress) by coderabbit\.ai")
 _OK_ONLY = re.compile(r"^\W*(lgtm|looks good( to me)?|ship it|merge( it)?|approved?|thanks?|thank you|👍|✅|:\+1:)\W*$", re.IGNORECASE)
 
 

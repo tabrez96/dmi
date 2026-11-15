@@ -63,6 +63,59 @@ def test_develop_only_follows_github(repo, github):
         gitops.sync_main(repo, str(github), {})
 
 
+def test_develop_adopts_githubs_copy_of_the_same_commits(repo, github):
+    (repo / "notes.md").write_text("notes\n")
+    gitops.commit_main(repo, "docs: notes")                                # what a pull request carried
+    tree = gitops.git(repo, "rev-parse", "HEAD^{tree}").stdout.strip()
+    parent = gitops.git(repo, "rev-parse", "HEAD~1").stdout.strip()
+    gitops.git(repo, "push", "-q", str(github), "HEAD:refs/heads/dmi/setup-notes")    # the pull request's branch
+    github_identity = {"GIT_AUTHOR_NAME": "GitHub", "GIT_AUTHOR_EMAIL": "noreply@github.com",
+                       "GIT_COMMITTER_NAME": "GitHub", "GIT_COMMITTER_EMAIL": "noreply@github.com"}
+    rewritten = gitops.git(github, "commit-tree", tree, "-p", parent, "-m", "docs: notes (rebase-merged)",
+                           env=github_identity).stdout.strip()
+    gitops.git(github, "update-ref", f"refs/heads/{gitops.DEV}", rewritten)          # same files, a new hash
+    gitops.sync_main(repo, str(github), {})
+    assert gitops.git(repo, "rev-parse", "HEAD").stdout.strip() == rewritten
+
+
+
+def test_develop_adopts_github_when_it_has_every_local_commit_and_more(repo, github):
+    github_identity = {"GIT_AUTHOR_NAME": "GitHub", "GIT_AUTHOR_EMAIL": "noreply@github.com",
+                       "GIT_COMMITTER_NAME": "GitHub", "GIT_COMMITTER_EMAIL": "noreply@github.com"}
+    (repo / "notes.md").write_text("notes\n")
+    gitops.commit_main(repo, "docs: notes")                                # the first pull request
+    parent = gitops.git(repo, "rev-parse", "HEAD~1").stdout.strip()
+    (repo / "CLAUDE.md").write_text("# For the crew\n")                  # a later one, not merged locally
+    gitops.git(repo, "add", "CLAUDE.md")
+    later_commit = gitops.git(repo, "commit-tree", gitops.git(repo, "write-tree").stdout.strip(), "-p", "HEAD",
+                              "-m", "docs: CLAUDE.md", env=github_identity).stdout.strip()
+    gitops.git(repo, "reset", "-q", "--hard", "HEAD")
+    gitops.git(repo, "push", "-q", str(github), "HEAD:refs/heads/dmi/setup-notes",
+               f"{later_commit}:refs/heads/dmi/setup-hq")
+    tree_of = {ref: gitops.git(github, "rev-parse", f"{ref}^{{tree}}").stdout.strip()
+               for ref in ("dmi/setup-notes", "dmi/setup-hq")}
+    rewritten = gitops.git(github, "commit-tree", tree_of["dmi/setup-notes"], "-p", parent, "-m", "docs: notes",
+                           env=github_identity).stdout.strip()                   # rebase merges: new hashes
+    later = gitops.git(github, "commit-tree", tree_of["dmi/setup-hq"], "-p", rewritten, "-m", "docs: CLAUDE.md",
+                       env=github_identity).stdout.strip()
+    gitops.git(github, "update-ref", f"refs/heads/{gitops.DEV}", later)
+    gitops.sync_main(repo, str(github), {})
+    assert gitops.git(repo, "rev-parse", "HEAD").stdout.strip() == later and (repo / "CLAUDE.md").exists()
+    (repo / "local.md").write_text("only here\n")
+    gitops.commit_main(repo, "docs: only here")
+    with pytest.raises(gitops.GitError):                                 # a commit GitHub never got still stops it
+        gitops.sync_main(repo, str(github), {})
+    gitops.git(repo, "reset", "-q", "--hard", "HEAD~1")                  # back to what GitHub has, then
+    (repo / "merged.md").write_text("only in a local merge\n")          # a merge commit of two commits GitHub
+    gitops.git(repo, "add", "merged.md")                                 # already has, with files it doesn't:
+    tree = gitops.git(repo, "write-tree").stdout.strip()                 # git cherry lists nothing for it
+    merge = gitops.git(repo, "commit-tree", tree, "-p", "HEAD", "-p", "HEAD~1", "-m", "Merge",
+                       env={"GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@example.com",
+                            "GIT_COMMITTER_NAME": "T", "GIT_COMMITTER_EMAIL": "t@example.com"}).stdout.strip()
+    gitops.git(repo, "reset", "-q", "--hard", merge)
+    with pytest.raises(gitops.GitError):
+        gitops.sync_main(repo, str(github), {})
+
 def test_hq_changes_are_taken_out_of_the_checkout_and_applied_on_a_branch(repo, tmp_path):
     (repo / "README.md").write_text("# Pingr\n\nNew words.\n")
     (repo / "CLAUDE.md").write_text("# For the crew\n")
@@ -262,3 +315,54 @@ def test_a_kept_ignore_rule_doesnt_stop_the_readme(tmp_path):
 
 def test_a_log_keeps_its_end():
     assert _tail(io.BytesIO(b"start " * 50_000 + b"error: at the end"), 100).endswith(b"error: at the end")
+
+
+def test_a_waiting_tickets_empty_branch_catches_up_with_develop(repo, tmp_path):
+    _branch, worktree = gitops.ensure_worktree(repo, tmp_path / "work", 70)   # cut early, while its dependency was open
+    (repo / "upload.py").write_text("print('upload')\n")
+    gitops.git(repo, "add", "upload.py")
+    gitops.commit_staged(repo, "Statement upload", "Darryl (Engineer) <engineer@dundermifflin.local>")
+    gitops.ensure_worktree(repo, tmp_path / "work", 70)
+    assert (worktree / "upload.py").exists()                            # the dependency's code is there now
+    (worktree / "headers.py").write_text("x = 1\n")
+    gitops.commit_all(worktree, "Security headers")
+    (repo / "later.py").write_text("y = 2\n")
+    gitops.git(repo, "add", "later.py")
+    gitops.commit_staged(repo, "Something later", "Darryl (Engineer) <engineer@dundermifflin.local>")
+    gitops.ensure_worktree(repo, tmp_path / "work", 70)
+    assert not (worktree / "later.py").exists()                         # a branch with its own work is left alone
+
+
+def test_an_empty_ticket_branch_catches_up_after_a_rebase_merge_rewrote_develop(repo, tmp_path):
+    _branch, worktree = gitops.ensure_worktree(repo, tmp_path / "work", 71)
+    rewritten = gitops.git(repo, "commit-tree", "HEAD^{tree}", "-p", "HEAD~1", "-m", "same files, new hash",
+                           env={"GIT_AUTHOR_NAME": "GitHub", "GIT_AUTHOR_EMAIL": "noreply@github.com",
+                                "GIT_COMMITTER_NAME": "GitHub", "GIT_COMMITTER_EMAIL": "noreply@github.com"}).stdout.strip()
+    gitops.git(repo, "reset", "-q", "--hard", rewritten)                # what sync_main does after a rebase merge
+    (repo / "upload.py").write_text("print('upload')\n")
+    gitops.git(repo, "add", "upload.py")
+    gitops.commit_staged(repo, "Statement upload", "Darryl (Engineer) <engineer@dundermifflin.local>")
+    gitops.ensure_worktree(repo, tmp_path / "work", 71)
+    assert (worktree / "upload.py").exists()                            # its old base was develop's, not its own work
+
+
+def test_a_ticket_commit_that_differs_only_in_whitespace_is_kept(repo, tmp_path):
+    _branch, worktree = gitops.ensure_worktree(repo, tmp_path / "work", 72)
+    (worktree / "rule.py").write_text("def ok(x):\n    if x:\n        pass\n    return True\n")   # the ticket's work
+    gitops.commit_all(worktree, "Return True always")
+    (repo / "rule.py").write_text("def ok(x):\n    if x:\n        pass\n        return True\n")  # develop: inside the if
+    gitops.git(repo, "add", "rule.py")
+    gitops.commit_staged(repo, "Return True when x", "Darryl (Engineer) <engineer@dundermifflin.local>")
+    gitops.ensure_worktree(repo, tmp_path / "work", 72)
+    assert (worktree / "rule.py").read_text().endswith("\n    return True\n")             # not reset away
+
+
+def test_a_ticket_that_reverts_a_develop_commit_keeps_its_revert(repo, tmp_path):
+    (repo / "feature.py").write_text("on = True\n")
+    gitops.git(repo, "add", "feature.py")
+    gitops.commit_staged(repo, "Turn the feature on", "Darryl (Engineer) <engineer@dundermifflin.local>")
+    _branch, worktree = gitops.ensure_worktree(repo, tmp_path / "work", 73)
+    gitops.git(worktree, "-c", "user.name=Darryl", "-c", "user.email=engineer@dundermifflin.local", "revert", "--no-edit",
+               "HEAD")                                                  # its files now equal develop's older commit
+    gitops.ensure_worktree(repo, tmp_path / "work", 73)
+    assert not (worktree / "feature.py").exists()                       # the revert is the ticket's work: kept

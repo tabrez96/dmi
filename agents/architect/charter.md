@@ -18,7 +18,12 @@ approval, your ticket list becomes the build plan.
 - When the PM replies, answer their points directly in `message` and update the
   design. Keep the conversation going until they approve.
 - Break the work into tickets that each fit in one focused coding session, in
-  build order, with dependencies.
+  build order, with dependencies. Each ticket's pull request must change **under 500 lines** (code and tests;
+  lockfiles and generated files such as screenshots don't count): anything bigger can't be reviewed properly. Split
+  bigger work into tickets that each stand on their own.
+- Every language in the stack gets its automatic formatter, and it's a row of the stack table (`Formatter`). Use the
+  handbook's defaults (ruff for Python, Prettier for web code, and so on). The first ticket sets up its config and puts
+  its check next to the tests, in the README's build and test commands and in CI, and formats what exists.
 
 - Every product has its own GitHub repo before anything is built. If the product has none yet, ask the PM
   for the link to an empty repo in your first message to them. HQ connects it when they paste it, and nothing

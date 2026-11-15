@@ -1,7 +1,9 @@
 """Git plumbing: the product repo, one worktree + branch per ticket, merging on ship."""
 
 import os
+import shutil
 import subprocess
+import tempfile
 import threading
 from pathlib import Path
 
@@ -136,8 +138,21 @@ def ensure_worktree(repo, workdir, tid):
                 git(repo, "worktree", "add", str(path), branch)
             else:
                 git(repo, "worktree", "add", "-b", branch, str(path), DEV)
+                git(repo, "update-ref", _base_ref(branch), DEV)      # where the ticket started
         elif not (path / ".git").exists():     # e.g. left by an interrupted setup: not a checkout git knows about
             raise GitError(f"{path} exists but isn't a git worktree; remove it and the ticket gets a fresh one")
+        # A branch cut before its dependencies landed (the ticket waited) has nothing of its own yet: bring it up to
+        # develop, which agents can't do themselves (their sandbox can't write the repo's git dir).
+        # It also has nothing of its own while it still sits where it started, even after a rebase merge rewrote
+        # develop under it (then develop no longer contains that start, but the recorded start says it is no work).
+        head = git(path, "rev-parse", "HEAD").stdout.strip()
+        start = git(repo, "rev-parse", "--verify", "--quiet", _base_ref(branch), check=False).stdout.strip()
+        empty = commits_ahead(path) == 0 or head == start
+        clean = not git(path, "status", "--porcelain", "--untracked-files=no").stdout.strip()
+        if empty and clean:
+            if git(path, "reset", "--quiet", "--keep", DEV, check=False).returncode != 0:
+                raise GitError(f"{path} can't be brought up to {DEV}; remove the untracked file that conflicts with it")
+            git(repo, "update-ref", _base_ref(branch), DEV)
     (path / ".dmi").mkdir(exist_ok=True)
     return branch, path
 
@@ -325,11 +340,44 @@ def sync_main(repo, url, env):
         if git(repo, "merge-base", "--is-ancestor", "HEAD", "FETCH_HEAD", check=False).returncode == 0:
             git(repo, "merge", "--ff-only", "FETCH_HEAD")
             return
+        same_files = git(repo, "diff", "--quiet", "HEAD", "FETCH_HEAD", check=False).returncode == 0
+        # A rebase merge rewrites local commits; `git cherry` marks each one GitHub has an equivalent of with "-"
+        # (GitHub may also have more on top, such as a later pull request).
+        cherry = git(repo, "cherry", "FETCH_HEAD", "HEAD").stdout.split()
+        if same_files or (cherry and all(mark == "-" for mark in cherry[::2])):    # cherry skips merges: none isn't all
+            git(repo, "reset", "--quiet", "--keep", "FETCH_HEAD")
+            return
         local = git(repo, "log", "--format=%h %s", "FETCH_HEAD..HEAD").stdout.strip()
         raise GitError(f"local develop has commits that aren't on GitHub (they need a pull request):\n{local}")
+
+
+def replay_on_remote(repo, url, env, base, tip):
+    """The commits `base..tip`, replayed on GitHub's develop as it is now (a pull request after an earlier one was
+    merged, possibly rewritten by a rebase merge). -> the new tip. Raises GitError if they don't apply cleanly."""
+    with _lock:
+        git(repo, "fetch", url, f"+refs/heads/{DEV}:refs/dmi/github-develop", env=env)
+        scratch = Path(tempfile.mkdtemp(prefix="dmi-replay-"))
+        try:
+            git(repo, "worktree", "add", "--quiet", "--detach", str(scratch / "tree"), tip)
+            hq = ("-c", "user.name=Dunder Mifflin HQ", "-c", "user.email=hq@dundermifflin.local")
+            done = git(scratch / "tree", *hq, "rebase", "--quiet", "--onto", "refs/dmi/github-develop", base,
+                       check=False)
+            if done.returncode != 0:
+                git(scratch / "tree", "rebase", "--abort", check=False)
+                raise GitError(f"couldn't replay {base[:7]}..{tip[:7]} on develop: {(done.stderr or done.stdout).strip()}")
+            return git(scratch / "tree", "rev-parse", "HEAD").stdout.strip()
+        finally:
+            git(repo, "worktree", "remove", "--force", str(scratch / "tree"), check=False)
+            shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _base_ref(branch):
+    """Where a ticket's branch started: a commit of develop at the time, kept even if develop is rewritten later."""
+    return f"refs/dmi/base/{branch}"
 
 
 def remove_worktree(repo, path, tid):
     with _lock:
         git(repo, "worktree", "remove", "--force", str(path), check=False)
         git(repo, "branch", "-D", branch_name(tid), check=False)
+        git(repo, "update-ref", "-d", _base_ref(branch_name(tid)), check=False)

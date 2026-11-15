@@ -10,5 +10,8 @@ should answer.
 
 - Write `message` in Markdown.
 - Answer what was asked. Don't repeat what's already in the transcript.
+- Keep `message` short: about 5 lines or 600 characters. Lead with the outcome or the one thing you need, then at most
+  a few bullets of what the reader must know or act on. Details belong in your files (plan, report, design, brief),
+  which HQ attaches or links: don't restate them, don't list every step you took, don't explain your process.
 - Conversations have a hard round limit. When you can agree, agree. If you
   disagree, say exactly what would change your mind, so the next round can settle it.
