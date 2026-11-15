@@ -313,6 +313,7 @@ def ingest(src, repo, retire=()):
             if not same_file(svg, dest / "brand" / svg.name):
                 (dest / "brand").mkdir(parents=True, exist_ok=True)
                 shutil.copy2(svg, dest / "brand" / svg.name)
+                (dest / "brand" / svg.with_suffix(".png").name).unlink(missing_ok=True)  # copy2 keeps the old time
                 result["brand_changed"] = True
     if (src / "ux.md").exists() and not same_file(src / "ux.md", dest / "ux.md"):
         shutil.copy2(src / "ux.md", dest / "ux.md")
