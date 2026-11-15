@@ -156,7 +156,7 @@ def test_a_fetch_url_cant_forge_log_lines(gate, monkeypatch, tmp_path):
     forged = urllib.parse.quote("https://x.example/\n2026-01-01 00:00:00 T-9 qa POST nvidia/v1 200")
     assert call(gate, f"/tools/fetch?url={forged}", gate.issue("T-1 scout", [], web=True), data=None)[0] == 200
     for _ in range(50):                      # the line is written just after the reply goes out
-        if gate.log_path.exists():
+        if gate.log_path.exists() and gate.log_path.read_text().endswith("\n"):     # the whole line, not just the file
             break
         time.sleep(0.02)
     assert len(gate.log_path.read_text().splitlines()) == 1

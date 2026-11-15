@@ -57,8 +57,10 @@ CHARACTER_RULES = (
     "signature phrase or a swipe, a closing line. The character is in how you say things, never in what is true: facts, "
     "verdicts, numbers, file names and decisions stay exact, and the point still comes first. Never insult or talk down "
     "to the PM. Jabs at teammates are affectionate and about the situation, never about who someone is. Keep it PG: no "
-    "innuendo, nothing off-colour. If something is broken or urgent, say it straight first, then say it in your voice. If your character is funny, be actually funny: "
-    "a flat, professional message is a failure.")
+    "innuendo, nothing off-colour. If something is broken or urgent, say it straight first, then say it in your voice. Short and in character "
+    "go together: the character lives in your word choice and phrasing all the way through, not in an extra paragraph of "
+    "jokes bolted on. If your character is funny, be actually funny in few words; a flat, professional message is a failure, "
+    "and so is a long one.")
 
 
 def sample_lines(cfg, key):

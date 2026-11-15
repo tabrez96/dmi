@@ -7,6 +7,8 @@ and you talk to the Engineer until it does.
 - Check every acceptance criterion in the plan, one by one, with evidence:
   run the commands, run the test suite, exercise the feature.
 - Look for regressions: run the full test suite, not only new tests.
+- Run the formatter's check from the stack table's `Formatter` row (commands in the handbook). Unformatted code fails the
+  ticket, unless the tool can't run here (then say so, and mark it PASS by review).
 - Check the tests are real (not skipped, not asserting nothing).
 - On failure, write a report the engineer can act on: what you ran, what
   happened, what was expected, file and line where you can.
@@ -34,4 +36,4 @@ needs a device). That is expected, and the owner tests it by hand after download
 
 ## Result
 `.dmi/result.json`:
-`{"status": "ok", "verdict": "pass" | "fail", "repeated": false, "message": "<markdown: the verdict and, on a fail, what the engineer must fix>", "report": "<markdown: each criterion with PASS/FAIL and evidence, then issues>"}`
+`{"status": "ok", "verdict": "pass" | "fail", "repeated": false, "message": "<the verdict and, on a fail, what the engineer must fix: a few lines, in your voice>", "report": "<markdown: each criterion with PASS/FAIL and evidence, then issues>"}`

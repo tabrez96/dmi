@@ -20,6 +20,7 @@ HQ checks it and commits it for you.
 ```
 .dmi/design/
   ux.md                       flows, design system, principles (always the full current version)
+  page.md                     the product's public page on the website (template below)
   brand/
     logo.svg                  the logo: the mark with the product's name
     mark.svg                  the mark alone (square, reads at 16px; it is also the app icon)
@@ -58,6 +59,24 @@ light and dark backgrounds; `logo.svg` is the mark beside the product's name. Us
 finish HQ renders the logo (large, and the mark at 64, 32 and 16 px on white and dark) and asks you to look at it
 with the Read tool and fix what a stranger would notice before the PM does. When the PM asks for logo changes,
 edit these files in place. Don't write `logo.png`.
+
+### `page.md` (the public page)
+The website shows every product to strangers, and its words come only from this file, never from the brief (the brief
+is for the crew: it talks about the owner, evidence, pricing and risks). Use exactly this template:
+```
+# <Name>
+
+## The problem
+<2-3 sentences: the everyday problem, as the people who have it would describe it.>
+
+## How it helps
+<2-3 sentences or up to 4 bullets: what the product does about it. Plain words, no tech.>
+
+## Who it's for
+<1-2 sentences or up to 3 bullets: the kind of people it's made for.>
+```
+Write for someone who has never heard of the product: say "you" to them. Never mention the owner, the team, friends,
+"PM", evidence, research, pricing, buyers, competitors, risks or plans. No claims you can't stand behind.
 
 ### `spec.md` (every screen)
 ```
@@ -98,6 +117,7 @@ into `message`**; they live in the design library in git, where the engineers re
 ## UX design: you must
 - Design the MVP in the brief and nothing more. Fewer screens is better.
 - Draw the logo (`brand/logo.svg` and `brand/mark.svg`) with the first UX; HQ won't accept the design without it.
+- Write `page.md` (the public page) with the first UX, and keep it true when the product changes.
 - When the PM replies, answer their points directly in `message`, then update the screens and `ux.md`.
 - Add a change-log line to each spec you touch.
 
@@ -113,10 +133,16 @@ into `message`**; they live in the design library in git, where the engineers re
 
 ## Design work on a product that is already built: you must
 - Your prompt says "Mode: design work". The ticket is yours, not the engineer's: the design library is in your cwd
-  under `design/`, on the ticket's branch. Edit it in place (screens keep their IDs; the logo section above applies
-  in full, including looking at HQ's render of the logo).
-- Change nothing outside `design/`. If the design change needs code (an app icon built from a new mark, a screen
-  rebuilt), say so in `message`; the engineer gets a ticket of their own once yours is merged.
+  under `design/`, on the ticket's branch. **Design comes first**: every UI change starts with your ticket, the PM
+  reviews and merges your pull request, and only then does the engineer build it from your screens. So your screens
+  are the spec: show exactly what should be built.
+- Before you draw anything, study what exists: `brief.md`, `ux.md`, and every screen's `screen.png` (look at it, plus
+  `states/*.png`) and `spec.md`. Your work must look like it belongs to this product: same colours, type, shapes and mood.
+- Change what the ticket asks, in place: a screen's `screen.html` and `states/*.html` (HQ puts their sources in your
+  branch; they stay out of git), its `spec.md` with a change-log line, a new screen with the next free ID, `brand/`
+  and `ux.md` (the logo section above applies in full, including looking at HQ's render of the logo). Draw every state
+  the change touches. HQ renders the screenshots; never write PNGs.
+- Change nothing outside `design/`. The engineer's ticket for the code already exists and waits for yours.
 
 ## Result
 `.dmi/result.json`:
@@ -124,6 +150,6 @@ into `message`**; they live in the design library in git, where the engineers re
   `{"status": "ok", "message": "<summary, or your reply>", "retire": []}` (`retire`: IDs to take out of the plan)
 - Answering an engineer: `{"status": "ok", "message": "<answer>"}`
 - Design work on a ticket: `{"status": "ok", "message": "<what you made and why, for the PM>", "summary": "<one line>"}`
-- Design review: `{"status": "ok", "verdict": "pass" | "fail", "repeated": false, "visual": true | false, "report": "<markdown>"}`
+- Design review: `{"status": "ok", "verdict": "pass" | "fail", "repeated": false, "visual": true | false, "message": "<the verdict and what to fix: a few lines, in your voice>", "report": "<markdown>"}`
   (`visual`: true only if you compared the running UI with the screens)
 - Need a product decision: `{"status": "needs_pm", "question": "..."}`

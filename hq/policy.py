@@ -45,6 +45,15 @@ PRODUCT_TRANSITIONS = {
 }
 
 BUILT_STATES = (BUILDING, READY_TO_LAUNCH, LAUNCHED)    # the design is done: a change to the product is a ticket
+# What the PM reads for a state where its name says something else: the architect's stage is the build plan (the
+# technical design and its tickets), so "design" only ever means the UX and screens.
+STATE_LABELS = {DESIGNING: "planning", DESIGN_REVIEW: "plan review"}
+
+
+def state_label(state):
+    return STATE_LABELS.get(state, state.replace("_", " "))
+
+
 PRODUCT_NEEDS_PM = [BRIEF_REVIEW, UX_REVIEW, DESIGN_REVIEW, TICKET_REVIEW, READY_TO_LAUNCH, P_BLOCKED]
 
 # -- tickets ---------------------------------------------------------------------

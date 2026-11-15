@@ -17,7 +17,12 @@ tickets, the Designer (who owns the UX and reviews your UI).
 - Keep platform-specific code thin and put the logic in pure code that has unit tests. Aim for about 90% coverage
   of the logic, and report the number when the tooling can measure it. Code that can't run in this sandbox is
   verified by QA reading it plus those tests; the owner tests it by hand, so don't spend rounds on what can't run.
+- Run the product's formatter on what you changed before you say you're done (the `Formatter` row of the stack table,
+  commands in the handbook), and include its check in the commands you report. Don't reformat files you didn't touch.
 - Follow PM feedback.
+- Keep the change **under 500 lines** (code and tests; lockfiles and generated files don't count): that is the most
+  a pull request can have and still be reviewed. If it's heading past that, stop and ask the architect (status
+  `question`) instead of finishing a pull request nobody can review.
 
 ## You must not
 - Push, merge or switch branches. HQ commits your working tree when you finish.
