@@ -128,8 +128,9 @@ def branch_name(tid):
     return f"dmi/t-{tid}"
 
 
-def ensure_worktree(repo, workdir, tid):
-    branch = branch_name(tid)
+def ensure_worktree(repo, workdir, tid, branch=None):
+    """The ticket's checkout, on its branch (`branch`, or dmi/t-<id>), made if missing. -> (branch, path)"""
+    branch = branch or branch_name(tid)
     path = Path(workdir).resolve() / f"T-{tid}"
     with _lock:
         if not path.exists():
@@ -214,6 +215,23 @@ def commit_patch(wt, patch, message, author=HQ_AUTHOR):
         git(wt, "reset", "--hard", "--quiet", check=False)
         raise GitError(f"git apply: {applied.stderr.decode(errors='replace').strip()[-400:]}")
     return commit_staged(wt, message, author)    # --3way staged exactly the patch; stray files (a .env) stay out
+
+
+def sync_branch(repo, wt, url, branch, env=None):
+    """Bring a worktree up to what GitHub has on its branch before HQ adds to it, so a commit the owner pushed there
+    is built on, never replaced by the force-push. Raises GitError if the two have diverged."""
+    with _lock:
+        looked = git(repo, "ls-remote", "--exit-code", "--heads", url, branch, env=env, check=False)
+        if looked.returncode == 2:
+            return                                           # not on GitHub (yet): nothing to reconcile
+        if looked.returncode != 0:                           # a failed lookup is not an absent branch
+            raise GitError(f"couldn't look up {branch} on GitHub: {looked.stderr.strip()[-300:]}")
+        git(repo, "fetch", url, f"+refs/heads/{branch}:refs/remotes/dmi-remote/{branch}", env=env)
+        remote = f"refs/remotes/dmi-remote/{branch}"
+        if git(wt, "merge-base", "--is-ancestor", remote, "HEAD", check=False).returncode == 0:
+            return                                           # HQ's branch already has everything GitHub has
+        if git(wt, "merge", "--ff-only", "--quiet", remote, check=False).returncode != 0:
+            raise GitError(f"{branch} on GitHub has commits HQ's copy doesn't, and the two have diverged")
 
 
 def discard_changes(path):
@@ -387,8 +405,18 @@ def _base_ref(branch):
     return f"refs/dmi/base/{branch}"
 
 
-def remove_worktree(repo, path, tid):
+def remove_worktree(repo, path, tid, branch=None):
+    branch = branch or branch_name(tid)
     with _lock:
         git(repo, "worktree", "remove", "--force", str(path), check=False)
-        git(repo, "branch", "-D", branch_name(tid), check=False)
-        git(repo, "update-ref", "-d", _base_ref(branch_name(tid)), check=False)
+        git(repo, "branch", "-D", branch, check=False)
+        git(repo, "update-ref", "-d", _base_ref(branch), check=False)
+
+
+def fetch_branch(repo, url, branch, env=None):
+    """Bring a branch that exists only on GitHub (a pull request HQ opened before it was a ticket) into the repo, its
+    start recorded as where it leaves develop. -> its first line (the change's title)."""
+    with _lock:
+        git(repo, "fetch", url, f"+refs/heads/{branch}:refs/heads/{branch}", env=env)
+        git(repo, "update-ref", _base_ref(branch), git(repo, "merge-base", DEV, branch).stdout.strip())
+        return git(repo, "log", "-1", "--format=%s", branch).stdout.strip()

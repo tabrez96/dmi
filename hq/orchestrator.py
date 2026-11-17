@@ -250,10 +250,12 @@ class HQ:
         with self._product_lock(p["id"]):
             return self._land_hq_change(self.board.product(p["id"]), *args, **kwargs)
 
-    def _land_hq_change(self, p, message, author=gitops.HQ_AUTHOR):
+    def _land_hq_change(self, p, message, author=gitops.HQ_AUTHOR, builder=""):
         """Land HQ's own change to a product: whatever is uncommitted in its checkout. A product on GitHub gets it as a
-        pull request (branch dmi/hq; later changes join it while it is open), because everything reaches develop
-        through one; a local-only product commits it to develop. Returns True if something was committed, False if there was nothing to commit, None if it failed."""
+        ticket whose pull request is already open (branch dmi/hq; later changes join it while it is open), so its review
+        comments go round the same loop as any ticket's: the planner triages them, the ticket's builder (`builder`:
+        "designer" for the design library, else the engineer) fixes what's worth it, and it is merged when clean.
+        A local-only product commits it to develop. Returns True if something was committed, False if there was nothing to commit, None if it failed."""
         repo = self.products_dir / p["slug"]
         if not self._on_github(p):
             return gitops.commit_main(repo, message, author)
@@ -261,45 +263,110 @@ class HQ:
         if not patch:
             return False
         slug, env = p["github_repo"], self.github.git_env()
-        url, name = remote_url(slug), pchannels.split_title(p["title"])[0]
-        setup = json.loads(p.get("setup_prs") or "{}")
-        prs, urls = setup.get("prs") or {}, setup.get("urls") or {}
-        wt = self.workdir / p["slug"] / "hq"
+        url, name, title = remote_url(slug), pchannels.split_title(p["title"])[0], message.splitlines()[0]
+        t, made, wt, start = None, None, None, None
         try:
-            pr_open = bool(prs.get("hq")) and self.github.pr_state(slug, prs["hq"]) == "open"
-            base = gitops.HQ_BRANCH if pr_open else gitops.DEV
-            gitops.git(repo, "fetch", url, f"+refs/heads/{base}:refs/dmi/hq-base", env=env)
-            gitops.git(repo, "worktree", "remove", "--force", str(wt), check=False)
-            gitops.git(repo, "worktree", "add", "--force", "--detach", str(wt), "refs/dmi/hq-base")
-            if not gitops.commit_patch(wt, patch, message, author):
+            screens = library.touched_screens(name.decode(errors="replace") for name in re.findall(
+                rb"^diff --git a/(\S+)", patch, re.MULTILINE))
+            pending = library.snapshot_sources(repo, screens)   # finishing a merged ticket below copies its HTML over these
+            t = self._hq_ticket(p)
+            library.restore_sources(pending)
+            if t and (t["claimed_by"] or t["state"] not in (policy.READY_TO_SHIP, policy.PR_REVIEW, policy.BLOCKED)):
+                raise gitops.GitError(f"its pull request (T-{t['id']}) is being worked on right now")
+            if not t:
+                gitops.git(repo, "branch", "-D", gitops.HQ_BRANCH, check=False)       # a merged one's leftover
+                made = self.board.create(title, "HQ's own change to the product, made outside the plan; it has no plan "
+                                         "of its own. Change only what the review comments ask for.",
+                                         policy.READY_TO_SHIP, actor="hq", product_id=p["id"], builder=builder)
+                self.board.update(made, branch=gitops.HQ_BRANCH)
+                t = self.board.get(made)
+            _, wt = gitops.ensure_worktree(repo, self.workdir / repo.name, t["id"], gitops.HQ_BRANCH)
+            self.board.update(t["id"], worktree=str(wt))
+            if not made:
+                gitops.sync_branch(repo, wt, url, gitops.HQ_BRANCH, env)    # the owner may have pushed to it
+            start = gitops.git(wt, "rev-parse", "HEAD").stdout.strip()      # a failure below puts the branch back here
+            if not gitops.commit_patch(wt, patch, message, author):    # the pull request already has it
+                if made:
+                    self.board.update(made, state=policy.REJECTED)
+                    gitops.remove_worktree(repo, wt, made, gitops.HQ_BRANCH)
+                else:                                      # a retry: what a failed push left behind reaches GitHub now
+                    gitops.push(repo, url, gitops.HQ_BRANCH, env, force=True)
                 return False
-            gitops.push_branch(repo, url, gitops.HQ_BRANCH, gitops.git(wt, "rev-parse", "HEAD").stdout.strip(), env,
-                               force=not pr_open)      # an open PR's branch only grows; a new one starts over
-            if pr_open:
-                self.board.post("product", p["id"], "hq", f"Added to HQ's pull request {urls.get('hq')}: "
-                                f"{message.splitlines()[0]}", kind="status")
+            def committed(*flags):                         # paths from NUL-terminated output, never quoted
+                return [name for name in gitops.git(wt, "show", "--name-only", "-z", "--format=", *flags, "HEAD").stdout.split("\0") if name]
+            screens = library.touched_screens(committed())
+            if screens:                                    # their HTML sources (kept out of git) go with the update
+                library.copy_sources(repo, wt, overwrite=True, folders=screens,
+                                     removed=library.removed_sources(committed("--no-renames", "--diff-filter=D")))
+            if not made:                                   # one commit per pull request: the change joins it
+                first = gitops.git(wt, "log", "--reverse", "--format=%an <%ae>", f"{gitops.DEV}..HEAD").stdout.splitlines()
+                gitops.squash_branch(wt, self._repo_title(t), first[0] if first else author)
+            builder = "designer" if "designer" in (builder, t["builder"]) else ""     # the design library is Pam's
+            self.board.update(t["id"], builder=builder)       # recorded before the push: a failed one keeps the commit
+            gitops.push(repo, url, gitops.HQ_BRANCH, env, force=True)
+            self.board.update(t["id"], description=f"{t['description']}\n\n- {message.strip()}")
+            if t["pr_number"]:                             # a ticket that never got its pull request opens it below
+                self.board.post("ticket", t["id"], "hq", f"Added to this pull request: {title}", kind="status")
+                self.board.post("product", p["id"], "hq", f"Added to HQ's pull request {t['pr_url']} (T-{t['id']}): "
+                                f"{title}", kind="status")
                 return True
-            prs["hq"], urls["hq"] = self.github.open_pr(
-                slug, gitops.HQ_BRANCH, gitops.DEV, message.splitlines()[0],
+            number, link = self.github.open_pr(
+                slug, gitops.HQ_BRANCH, gitops.DEV, title,
                 f"Changes HQ made to {name} outside a ticket. Every change reaches `develop` through a pull request, "
-                "these included: review and merge it like any other.")
-            setup.update(prs=prs, urls=urls, done=False, at=time.time())
+                "these included. Review comments are triaged and fixed like any pull request's.")
+            self.board.update(t["id"], pr_number=number, pr_url=link)
+            setup = json.loads(p.get("setup_prs") or "{}")        # the build waits for it, like the setup PRs
+            setup.setdefault("prs", {})["hq"], setup.setdefault("urls", {})["hq"] = number, link
+            setup.update(done=False, at=time.time())
             self.board.update_product(p["id"], setup_prs=json.dumps(setup))
-            self.board.post("product", p["id"], "hq", f"HQ changed {name} ({message.splitlines()[0]}). It's a pull "
-                            f"request, like every change: {urls['hq']}", kind="status")
+            self.board.post("product", p["id"], "hq", f"HQ changed {name} ({title}). It's a pull request, like every "
+                            f"change, tracked as T-{t['id']}: {link}", kind="status")
             return True
-        except (gitops.GitError, GitHubError) as e:
+        except (gitops.GitError, GitHubError, OSError, policy.IllegalTransition) as e:
+            if made:
+                self.board.update(made, state=policy.REJECTED)
+                if wt:
+                    gitops.remove_worktree(repo, wt, made, gitops.HQ_BRANCH)
+            elif wt and start:                         # nothing half-done stays on the branch; the saved patch has it
+                gitops.git(wt, "reset", "--hard", "--quiet", start, check=False)
             folder = self.state_dir / "hq-patches"
             folder.mkdir(parents=True, exist_ok=True)
             handle, kept = tempfile.mkstemp(prefix=f"{p['slug']}-{int(time.time())}-", suffix=".patch", dir=folder)
             with os.fdopen(handle, "wb") as saved:   # a file of its own: a second failure never overwrites the first
                 saved.write(patch)
             self.board.post("product", p["id"], "hq", f"HQ couldn't open a pull request for its change to {name} "
-                            f"({message.splitlines()[0]}): {e}. The change is saved in `{kept}`.",
-                            recipient="pm", kind="escalation")
+                            f"({title}): {e}. The change is saved in `{kept}`.", recipient="pm", kind="escalation")
             return None                                # not "nothing to do": it failed, and the change is saved
-        finally:
-            gitops.git(repo, "worktree", "remove", "--force", str(wt), check=False)
+
+    def _hq_ticket(self, p):
+        """The ticket for HQ's open pull request on this product, or None. A pull request HQ opened before its changes
+        were tickets becomes one here, so its review comments are picked up too."""
+        for t in self.board.list(product_id=p["id"]):
+            if t["branch"] == gitops.HQ_BRANCH and t["state"] not in (policy.SHIPPED, policy.REJECTED):
+                state = self.github.pr_state(p["github_repo"], t["pr_number"]) if t["pr_number"] else "open"
+                if state == "open":
+                    return t
+                if state == "merged":             # merged since the last poll: finish it first, then start a new one
+                    if t["state"] == policy.BLOCKED:           # it can't be shipped from there
+                        self.board.transition(t["id"], policy.READY_TO_SHIP, "hq", "its pull request was merged")
+                    if not self._finish_ship(self.board.get(t["id"]), f"PR #{t['pr_number']} merged on GitHub. ✅"):
+                        raise gitops.GitError(f"its merged pull request (T-{t['id']}) couldn't be finished yet")
+                elif t["state"] in (policy.READY_TO_SHIP, policy.PR_REVIEW):   # closed unmerged: _poll_prs blocks it
+                    raise gitops.GitError(f"its pull request (T-{t['id']}) was closed without merging")
+        number = (json.loads(p.get("setup_prs") or "{}").get("prs") or {}).get("hq")
+        if not number or self.github.pr_state(p["github_repo"], number) != "open":
+            return None
+        gitops.fetch_branch(self.products_dir / p["slug"], remote_url(p["github_repo"]), gitops.HQ_BRANCH,
+                            self.github.git_env())
+        title = self.github.pr_title(p["github_repo"], number)           # the pull request's own, not its last commit's
+        tid = self.board.create(title, "HQ's own change to the product, made outside the plan; it has no plan of its "
+                                "own. Change only what the review comments ask for.", policy.READY_TO_SHIP, actor="hq",
+                                product_id=p["id"], builder="designer" if title.startswith("design:") else "")
+        link = (json.loads(p["setup_prs"]).get("urls") or {}).get("hq")
+        self.board.update(tid, branch=gitops.HQ_BRANCH, pr_number=number, pr_url=link)
+        self.board.post("ticket", tid, "hq", f"HQ's pull request {link}, now a ticket: its review comments are "
+                        "triaged and fixed like any other's.", kind="status")
+        return self.board.get(tid)
 
     def _author(self, role):
         """Git author for a role's commits, in the crew's own names: 'Pam (Designer) <designer@dundermifflin.local>'."""
@@ -680,7 +747,7 @@ class HQ:
             if self._over_budget(role):
                 return self._block_ticket(t, "hq", f"{role} hit its daily run limit.")
             repo = self.repo_for(t)
-            branch, wt = gitops.ensure_worktree(repo, self.workdir / repo.name, tid)
+            branch, wt = gitops.ensure_worktree(repo, self.workdir / repo.name, tid, t["branch"])
             self.board.update(tid, branch=branch, worktree=str(wt))
             t = self.board.get(tid)
             self._clear(wt, "plan.md")
@@ -1143,6 +1210,8 @@ class HQ:
             return
         d, slug = json.loads(p["setup_prs"]), p["github_repo"]
         try:
+            if d.get("prs", {}).get("hq"):
+                self._hq_ticket(p)                  # an HQ pull request from before they were tickets
             states = {k: self.github.pr_state(slug, n) for k, n in d["prs"].items()}
             if all(v == "merged" for v in states.values()) and d.get("queue"):
                 self._open_next_setup_pr(p, d)
@@ -1175,7 +1244,7 @@ class HQ:
                 self.board.post("product", p["id"], "hq", f"CodeRabbit hasn't reviewed {slug}. Every repo should have it: "
                                 "install the CodeRabbit GitHub app on it (github.com/apps/coderabbitai).", kind="status")
             for key, number in d["prs"].items():
-                if states[key] != "open":
+                if states[key] != "open" or key == "hq":       # HQ's own: its ticket asks CodeRabbit again
                     continue
                 tries = d.setdefault("cr_retries", {}).setdefault(str(number), [])
                 if self._ask_coderabbit_again(slug, number, tries) == "asked":
@@ -1211,7 +1280,7 @@ class HQ:
         made, tickets = 0, self.board.list(product_id=pid)
         by_id = {t["id"]: t for t in tickets}
         for t in sorted(tickets, key=lambda t: t["id"]):
-            if t["issue_number"] or t["state"] in (policy.SHIPPED, policy.REJECTED):
+            if t["issue_number"] or t["state"] in (policy.SHIPPED, policy.REJECTED) or t["branch"] == gitops.HQ_BRANCH:
                 continue
             deps = [by_id[d] for d in json.loads(t["depends_on"] or "[]") if d in by_id]
             dep_txt = ("\n\n**Depends on:** " + ", ".join(
@@ -1285,7 +1354,7 @@ class HQ:
 
     def _open_pr(self, t, report, wt, visual=None):
         slug = self._slug(t)
-        repo, branch = self.repo_for(t), gitops.branch_name(t["id"])
+        repo, branch = self.repo_for(t), t["branch"] or gitops.branch_name(t["id"])
         url = remote_url(slug)
         closes = f"Closes #{t['issue_number']}\n\n" if t.get("issue_number") else ""
         body = f"{closes}{self._pr_summary(t['description'])}{self._design_section(t, visual)}"   # short
@@ -1465,7 +1534,9 @@ class HQ:
         slug, tid = self._slug(t), t["id"]
         try:
             repo = self.repo_for(t)
-            branch, wt = gitops.ensure_worktree(repo, self.workdir / repo.name, tid)
+            branch, wt = gitops.ensure_worktree(repo, self.workdir / repo.name, tid, t["branch"])
+            if t["worktree"] != str(wt):                          # recorded at once, so cleanup finds it if this fails
+                self.board.update(tid, branch=branch, worktree=str(wt))
             changed = gitops.refresh_lock(wt)
             if changed:
                 gitops.push(repo, remote_url(slug), branch, self.github.git_env(), force=True)
@@ -1866,7 +1937,7 @@ class HQ:
         if t["worktree"]:
             if t.get("builder") == "designer":      # her edited screen sources live on in the product's checkout
                 library.copy_sources(Path(t["worktree"]), repo, overwrite=True)
-            gitops.remove_worktree(repo, t["worktree"], t["id"])
+            gitops.remove_worktree(repo, t["worktree"], t["id"], t["branch"])
         self.board.transition(t["id"], policy.SHIPPED, "hq", "merged to develop", worktree=None)
         slug = t.get("product_id") and self.board.product(t["product_id"]).get("github_repo")
         if slug and t.get("issue_number") and self.github:     # `Closes #n` only fires on the default branch
@@ -2157,7 +2228,7 @@ class HQ:
         if p["slug"] and (self.products_dir / p["slug"]).is_dir():     # the file first: if it fails, a retry redoes it
             (library.design_dir(self.products_dir / p["slug"]) / "brief.md").write_text(brief + "\n")
             if self._hq_commit(self.board.product(pid), "design: brief: " + "; ".join(additions)[:200],
-                            author=self._author("analyst")) is None:
+                            author=self._author("analyst"), builder="designer") is None:
                 return False                                  # not published: kept retryable, not recorded
         self.board.update_product(pid, brief=brief)
         self.board.post("product", pid, author, "Added to the brief, so the plan covers it:\n" +
@@ -2201,7 +2272,8 @@ class HQ:
         if notes:
             self._refresh_library(p["id"], commit=False)   # screenshots and index ride in this same commit
             first = (result.get("summary") or msg.split("\n", 1)[0]).strip()[:60]
-            if self._hq_commit(p, f"design: {first}\n\n" + "\n".join(notes), author=self._author("designer")) is None:
+            if self._hq_commit(p, f"design: {first}\n\n" + "\n".join(notes), author=self._author("designer"),
+                            builder="designer") is None:
                 return self._product_failed(p, "designer", "the design couldn't be published (see HQ's message)")
         self.board.update_product(p["id"], ux=ux)
         self._refresh_library(p["id"])
@@ -2649,7 +2721,7 @@ class HQ:
             self.board.update_product(pid, slug=slug)
         self.ensure_claude_md(repo, p)
         self.board.number_approved()          # approved products get the next P-number; passed ideas never do
-        self._hq_commit(self.board.product(pid), "design: start the library (brief, UX spec, screens)")
+        self._hq_commit(self.board.product(pid), "design: start the library (brief, UX spec, screens)", builder="designer")
         return self.board.product(pid)
 
     def migrate_designs(self):
@@ -2687,7 +2759,7 @@ class HQ:
                     readme.write_text(text)
                     changed = True
                 if changed and commit:
-                    self._hq_commit(p, "design: refresh screenshots and index")
+                    self._hq_commit(p, "design: refresh screenshots and index", builder="designer")
             self.check_design_drift(self.board.product(pid))
         except Exception as e:  # noqa: BLE001 - the library is a convenience: it must never break the pipeline
             self.say(f"!! design library refresh for product {pid}: {e!r}")
