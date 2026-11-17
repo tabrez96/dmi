@@ -142,6 +142,9 @@ class GitHub:
         pr = self._call("GET", f"/repos/{slug}/pulls/{number}")
         return "merged" if pr.get("merged") else pr["state"]
 
+    def pr_title(self, slug, number):
+        return self._call("GET", f"/repos/{slug}/pulls/{number}")["title"]
+
     def pr_head(self, slug, number):
         """The commit a pull request's branch points at now."""
         return self._call("GET", f"/repos/{slug}/pulls/{number}")["head"]["sha"]

@@ -127,3 +127,30 @@ def test_screenshots_run_no_scripts_even_encoded_ones(tmp_path, monkeypatch):
     (tmp_path / "page.html").write_text("<!doctype html><iframe srcdoc='&lt;script&gt;x()&lt;/script&gt;'></iframe>")
     library.render_png(tmp_path / "page.html", tmp_path / "page.png")
     assert pages[0].startswith("<!doctype html>" + library.NO_SCRIPTS)     # the policy covers the frame's script too
+
+
+def test_copy_sources_can_be_limited_to_some_screens(tmp_path):
+    product, ticket = tmp_path / "product", tmp_path / "ticket"
+    for checkout in (product, ticket):
+        for folder in ("S01-menu", "S02-detail"):
+            (checkout / "design" / "screens" / folder).mkdir(parents=True)
+    for folder in ("S01-menu", "S02-detail"):
+        (product / "design" / "screens" / folder / "screen.html").write_text("<p>new</p>")
+        (ticket / "design" / "screens" / folder / "screen.html").write_text("<p>review fix</p>")
+    assert library.copy_sources(product, ticket, overwrite=True, folders={"S01-menu"}) == 1
+    assert (ticket / "design" / "screens" / "S01-menu" / "screen.html").read_text() == "<p>new</p>"
+    assert (ticket / "design" / "screens" / "S02-detail" / "screen.html").read_text() == "<p>review fix</p>"
+
+
+def test_a_state_the_update_deleted_goes_from_the_ticket_copy_too(tmp_path):
+    product, ticket = tmp_path / "product", tmp_path / "ticket"
+    for checkout in (product, ticket):
+        (checkout / "design" / "screens" / "S01-menu" / "states").mkdir(parents=True)
+    (product / "design" / "screens" / "S01-menu" / "screen.html").write_text("<p>menu</p>")
+    (ticket / "design" / "screens" / "S01-menu" / "screen.html").write_text("<p>menu</p>")
+    (ticket / "design" / "screens" / "S01-menu" / "states" / "empty.html").write_text("<p>old</p>")
+    (ticket / "design" / "screens" / "S01-menu" / "states" / "loading.html").write_text("<p>review fix</p>")
+    removed = library.removed_sources(["design/screens/S01-menu/states/empty.png"])
+    library.copy_sources(product, ticket, overwrite=True, folders={"S01-menu"}, removed=removed)
+    assert not (ticket / "design" / "screens" / "S01-menu" / "states" / "empty.html").exists()     # the update removed it
+    assert (ticket / "design" / "screens" / "S01-menu" / "states" / "loading.html").exists()       # a review fix stays

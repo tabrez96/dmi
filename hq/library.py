@@ -18,6 +18,7 @@ Screen IDs (S01, S02, ...) are stable: they're how the PM asks for changes ("S02
 the title") and how tickets name the screens they build. Status is computed, never stored by hand.
 """
 
+import os
 import re
 import shutil
 import subprocess
@@ -134,20 +135,53 @@ PAGE_TEMPLATE = """# <Name>
 """
 
 
-def copy_sources(from_repo, to_repo, overwrite=False):
+def copy_sources(from_repo, to_repo, overwrite=False, folders=None, removed=()):
     """Copy the screens' HTML sources (kept out of git, so a ticket's checkout doesn't have them) from one checkout to
     another, keeping their file times so only what gets edited is rendered again. Only into screen folders that exist
-    there; `overwrite=False` keeps what is already there (the designer's edits). Returns the number copied."""
+    there; `overwrite=False` keeps what is already there (the designer's edits). `folders` limits it to those screen
+    folders (names like "S01-orders"); `removed` are sources (paths under design/) the update deleted, taken out of the
+    target too, and nothing else is. Returns the number copied."""
     source, target = design_dir(from_repo), design_dir(to_repo)
     copied = 0
     for source_file in sorted(source.glob("screens/**/*.html")):
         rel = source_file.relative_to(source)
         dest = target / rel
+        if folders is not None and rel.parts[1] not in folders:
+            continue
         if (target / rel.parts[0] / rel.parts[1]).is_dir() and (overwrite or not dest.exists()):  # screens/S01-x exists
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_file, dest)
             copied += 1
+    for rel in removed:
+        (target / rel).unlink(missing_ok=True)
     return copied
+
+
+def touched_screens(names):
+    """The screen folders ("S01-orders") among changed file paths."""
+    return {parts[2] for parts in (Path(name).parts for name in names) if parts[:2] == ("design", "screens") and len(parts) > 3}
+
+
+def removed_sources(names):
+    """The HTML sources, as paths under design/, that deleted tracked files (a screen's or state's PNG, or its HTML)
+    stand for."""
+    return {Path(name).relative_to("design").with_suffix(".html") for name in names
+            if Path(name).parts[:2] == ("design", "screens") and Path(name).suffix in (".png", ".html")}
+
+
+def snapshot_sources(repo, folders):
+    """The HTML sources of these screen folders in a checkout, with their file times: {path: (bytes, mtime)}."""
+    base = design_dir(repo)
+    return {path: (path.read_bytes(), path.stat().st_mtime) for path in sorted(base.glob("screens/**/*.html"))
+            if path.relative_to(base).parts[1] in folders}
+
+
+def restore_sources(snapshot):
+    """Put a snapshot back, as it was (a copy made meanwhile can't replace it)."""
+    for path, (content, mtime) in snapshot.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        os.utime(path, (mtime, mtime))
 
 
 def has_sources(tree):

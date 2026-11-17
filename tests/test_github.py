@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import time
+from pathlib import Path
 
 import pytest
 from conftest import drain, roles
@@ -84,6 +85,9 @@ class FakeGitHub:
 
     def pr_state(self, slug, number):
         return self.prs[number]["state"]
+
+    def pr_title(self, slug, number):
+        return self.prs[number]["title"]
 
     def merge_pr(self, slug, number, title, method="rebase", sha=None):
         """Like GitHub's rebase merge: the PR's commits are written again on top of develop, so they get new hashes."""
@@ -1118,6 +1122,178 @@ def test_a_retry_of_blocked_comment_triage_goes_back_to_triage(gh_hq):
                     pr_feedback=json.dumps([{"id": 1, "where": "a.py:1", "body": "x"}]))
     hq.retry(tid)
     assert hq.board.get(tid)["state"] == policy.PR_REVIEW                 # the planner decides before anyone fixes
+
+
+# -- HQ's own changes: tickets whose pull request is already open, reviewed like any other ------------
+
+def test_hqs_own_change_is_a_ticket_and_its_review_comments_get_fixed(gh_hq):
+    hq, pid, bare = gh_hq
+    repo = hq.products_dir / "cadence"
+    (repo / "CLAUDE.md").write_text("# Cadence\n")
+    assert hq._hq_commit(hq.board.product(pid), "docs: CLAUDE.md for the crew")
+    (repo / "NOTES.md").write_text("notes\n")
+    assert hq._hq_commit(hq.board.product(pid), "docs: notes")                    # joins the open one
+    [t] = [t for t in hq.board.list(product_id=pid) if t["branch"] == gitops.HQ_BRANCH]
+    assert t["state"] == policy.READY_TO_SHIP and t["pr_number"] == 1 and len(hq.github.prs) == 1
+    on_github = subprocess.run(["git", "--git-dir", str(bare), "rev-list", "develop..dmi/hq"],
+                               capture_output=True, text=True, check=True).stdout.split()
+    assert len(on_github) == 1                                                    # one commit per pull request
+    review(hq, 1, 10, "Say what the crew may not touch.")
+    hq.tick()
+    drain(hq)                                                                     # Jim triages, the engineer fixes
+    t = hq.board.get(t["id"])
+    assert t["state"] == policy.READY_TO_SHIP and t["review_rounds"] == 1 and len(hq.github.prs) == 1
+
+
+def test_a_commit_the_owner_pushed_to_hqs_branch_is_kept(gh_hq):
+    hq, pid, bare = gh_hq
+    repo = hq.products_dir / "cadence"
+    (repo / "CLAUDE.md").write_text("# Cadence\n")
+    assert hq._hq_commit(hq.board.product(pid), "docs: CLAUDE.md for the crew")
+    owner = hq.products_dir.parent / "owner-clone"                       # the owner adds a commit on GitHub
+    subprocess.run(["git", "clone", "-q", "-b", "dmi/hq", str(bare), str(owner)], check=True, capture_output=True)
+    (owner / "OWNER.md").write_text("mine\n")
+    for args in (["add", "."], ["-c", "user.name=Owner", "-c", "user.email=o@x", "commit", "-qm", "owner fix"],
+                 ["push", "-q", "origin", "dmi/hq"]):
+        subprocess.run(["git", *args], cwd=owner, check=True, capture_output=True)
+    (repo / "NOTES.md").write_text("notes\n")
+    assert hq._hq_commit(hq.board.product(pid), "docs: notes")
+    files = subprocess.run(["git", "--git-dir", str(bare), "ls-tree", "-r", "--name-only", "dmi/hq"],
+                           capture_output=True, text=True, check=True).stdout.split()
+    assert "OWNER.md" in files and "NOTES.md" in files                    # the owner's commit survived the push
+
+
+def test_pending_design_html_survives_finishing_the_merged_ticket(gh_hq):
+    hq, pid, bare = gh_hq
+    repo = hq.products_dir / "cadence"
+    screen = repo / "design" / "screens" / "S01-menu"
+    screen.mkdir(parents=True)
+    base = "first\n1\n2\n3\n4\nlast\n"
+    (screen / "spec.md").write_text(base)
+    gitops.commit_all(repo, "design: S01")
+    gitops.push(repo, str(bare), "develop", {})
+    (screen / "spec.md").write_text(base.replace("first", "FIRST"))
+    (screen / "screen.html").write_text("<p>v1</p>")
+    assert hq._hq_commit(hq.board.product(pid), "design: S01 first line", builder="designer")
+    hq.github.merge_pr("me/cadence", 1, "design: S01 first line")                 # merged, not yet finished by HQ
+    (screen / "spec.md").write_text(base.replace("last", "LAST"))
+    (screen / "screen.html").write_text("<p>v2</p>")                              # pending: ignored by git, not in a patch
+    result = hq._hq_commit(hq.board.product(pid), "design: S01 last line", builder="designer")
+    assert result, hq.board.messages("product", pid)[-1]["body"]
+    [new_ticket] = [t for t in hq.board.list(product_id=pid) if t["state"] != policy.SHIPPED and t["branch"] == gitops.HQ_BRANCH]
+    assert (Path(new_ticket["worktree"]) / "design" / "screens" / "S01-menu" / "screen.html").read_text() == "<p>v2</p>"
+
+
+def test_finishing_a_merged_ticket_keeps_its_html_for_screens_the_next_change_leaves_alone(gh_hq):
+    hq, pid, bare = gh_hq
+    repo = hq.products_dir / "cadence"
+    screen = repo / "design" / "screens" / "S01-menu"
+    (screen / "states").mkdir(parents=True)
+    (screen / "spec.md").write_text("first\n")
+    gitops.commit_all(repo, "design: S01")
+    gitops.push(repo, str(bare), "develop", {})
+    (screen / "spec.md").write_text("FIRST\n")
+    (screen / "screen.html").write_text("<p>v1</p>")
+    (screen / "states" / "café.png").write_bytes(b"png")                        # a non-ASCII name git would quote
+    (screen / "states" / "café.html").write_text("<p>état</p>")
+    assert hq._hq_commit(hq.board.product(pid), "design: S01", builder="designer")
+    [first] = [t for t in hq.board.list(product_id=pid) if t["branch"] == gitops.HQ_BRANCH]
+    ticket_screen = Path(first["worktree"]) / "design" / "screens" / "S01-menu"
+    assert (ticket_screen / "states" / "café.html").read_text() == "<p>état</p>"   # copied despite the quoting
+    (ticket_screen / "screen.html").write_text("<p>v1, after a review fix</p>")
+    hq.github.merge_pr("me/cadence", 1, "design: S01")
+    (repo / "NOTES.md").write_text("notes\n")                                     # the next change leaves S01 alone
+    assert hq._hq_commit(hq.board.product(pid), "docs: notes")
+    assert (screen / "screen.html").read_text() == "<p>v1, after a review fix</p>"   # the merged source was not undone
+
+
+def test_a_blocked_hq_ticket_whose_pull_request_merged_is_finished_and_the_change_opens_a_new_one(gh_hq):
+    hq, pid, _bare = gh_hq
+    repo = hq.products_dir / "cadence"
+    (repo / "CLAUDE.md").write_text("# Cadence\n")
+    assert hq._hq_commit(hq.board.product(pid), "docs: CLAUDE.md for the crew")
+    [first] = [t for t in hq.board.list(product_id=pid) if t["branch"] == gitops.HQ_BRANCH]
+    hq.board.transition(first["id"], policy.BLOCKED, "hq", "stuck")
+    hq.github.merge_pr("me/cadence", 1, "docs: CLAUDE.md for the crew")          # the owner merged it meanwhile
+    (repo / "NOTES.md").write_text("notes\n")
+    assert hq._hq_commit(hq.board.product(pid), "docs: notes")
+    assert hq.board.get(first["id"])["state"] == policy.SHIPPED and len(hq.github.prs) == 2
+
+
+def test_a_renamed_state_screenshot_takes_its_old_source_with_it(gh_hq):
+    hq, pid, bare = gh_hq
+    repo = hq.products_dir / "cadence"
+    states = repo / "design" / "screens" / "S01-menu" / "states"
+    states.mkdir(parents=True)
+    (repo / "design" / "screens" / "S01-menu" / "spec.md").write_text("spec\n")
+    (states / "empty.png").write_bytes(b"png-bytes-that-are-long-enough-to-be-a-rename" * 20)
+    gitops.commit_all(repo, "design: S01")
+    gitops.push(repo, str(bare), "develop", {})
+    (repo / "NOTES.md").write_text("notes\n")
+    assert hq._hq_commit(hq.board.product(pid), "docs: notes")                    # the ticket and its worktree exist
+    [ticket] = [t for t in hq.board.list(product_id=pid) if t["branch"] == gitops.HQ_BRANCH]
+    ticket_states = Path(ticket["worktree"]) / "design" / "screens" / "S01-menu" / "states"
+    (ticket_states / "empty.html").write_text("<p>old source</p>")
+    (states / "empty.png").rename(states / "blank.png")                           # git sees a rename, not a delete
+    (states / "blank.html").write_text("<p>blank</p>")
+    assert hq._hq_commit(hq.board.product(pid), "design: rename a state", builder="designer")
+    assert not (ticket_states / "empty.html").exists() and (ticket_states / "blank.html").exists()
+
+
+def test_a_failed_push_after_the_squash_leaves_the_branch_retryable(gh_hq, monkeypatch):
+    hq, pid, bare = gh_hq
+    repo = hq.products_dir / "cadence"
+    (repo / "CLAUDE.md").write_text("# Cadence\n")
+    assert hq._hq_commit(hq.board.product(pid), "docs: CLAUDE.md for the crew")
+    real_push = gitops.push
+    monkeypatch.setattr(gitops, "push", lambda *args, **kwargs: (_ for _ in ()).throw(gitops.GitError("network")))
+    (repo / "NOTES.md").write_text("notes\n")
+    assert hq._hq_commit(hq.board.product(pid), "docs: notes") is None           # failed; the patch is saved
+    monkeypatch.setattr(gitops, "push", real_push)
+    (repo / "MORE.md").write_text("more\n")
+    assert hq._hq_commit(hq.board.product(pid), "docs: more")                    # not stuck on a diverged branch
+    files = subprocess.run(["git", "--git-dir", str(bare), "ls-tree", "-r", "--name-only", "dmi/hq"],
+                           capture_output=True, text=True, check=True).stdout.split()
+    assert "CLAUDE.md" in files and "MORE.md" in files
+
+
+def test_a_failed_remote_lookup_is_not_taken_for_an_absent_branch(tmp_path):
+    repo = tmp_path / "repo"
+    gitops.init_product(repo, "Cadence")
+    with pytest.raises(gitops.GitError, match="couldn't look up"):
+        gitops.sync_branch(repo, repo, str(tmp_path / "no-such-remote.git"), "dmi/hq")
+
+
+def test_hqs_change_after_its_pull_request_merged_opens_a_new_one(gh_hq):
+    hq, pid, bare = gh_hq
+    repo = hq.products_dir / "cadence"
+    (repo / "CLAUDE.md").write_text("# Cadence\n")
+    assert hq._hq_commit(hq.board.product(pid), "docs: CLAUDE.md for the crew")
+    hq.github.merge_pr("me/cadence", 1, "docs: CLAUDE.md for the crew")           # merged before HQ's next poll
+    (repo / "NOTES.md").write_text("notes\n")
+    assert hq._hq_commit(hq.board.product(pid), "docs: notes")
+    assert len(hq.github.prs) == 2                                                # not added to the merged one
+    files = lambda ref: subprocess.run(["git", "--git-dir", str(bare), "ls-tree", "-r", "--name-only", ref],
+                                       capture_output=True, text=True, check=True).stdout.split()
+    assert "CLAUDE.md" in files("develop") and "NOTES.md" in files("dmi/hq")      # the merged change survived
+
+
+def test_an_hq_pull_request_from_before_becomes_a_ticket(gh_hq):
+    hq, pid, bare = gh_hq
+    repo = hq.products_dir / "cadence"
+    gitops.git(repo, "checkout", "-q", "-b", "old-hq")
+    (repo / "design.md").write_text("library\n")
+    gitops.commit_all(repo, "design: start the library (brief, UX spec, screens)")
+    (repo / "typo.md").write_text("fixed\n")
+    gitops.commit_all(repo, "docs: fix wording")                      # the last commit isn't what the pull request is
+    gitops.git(repo, "push", "-q", str(bare), "old-hq:refs/heads/dmi/hq")
+    gitops.git(repo, "checkout", "-q", "develop")
+    number, link = hq.github.open_pr("me/cadence", "dmi/hq", "develop", "design: start the library", "")
+    hq.board.update_product(pid, setup_prs=json.dumps({"prs": {"hq": number}, "urls": {"hq": link}, "done": False}))
+    hq._setup_polled = 0
+    hq._poll_setup()
+    [t] = [t for t in hq.board.list(product_id=pid) if t["branch"] == gitops.HQ_BRANCH]
+    assert t["pr_number"] == number and t["builder"] == "designer" and t["title"].startswith("design: start")
 
 
 def test_a_merge_github_cant_confirm_is_checked_again_not_sent_back(gh_hq):
