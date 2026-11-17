@@ -105,7 +105,8 @@ def test_connect_only_to_package_registries(gate):
     for _ in range(3):                                                   # refusals don't use up the cap
         assert b" 403 " in connect(gate, "evil.example.com:443", token)
     assert b" 403 " in connect(gate, "pypi.org:443", gate.issue("x", ["nvidia"]))   # no package grant
-    assert b" 401 " in connect(gate, "pypi.org:443")                    # no token
+    asked = connect(gate, "pypi.org:443")                                # no token: asked for one, as Java expects
+    assert b" 407 " in asked and b"Proxy-Authenticate: Basic" in asked
     assert gate.grant(token).used == 0
 
 
@@ -160,3 +161,68 @@ def test_a_fetch_url_cant_forge_log_lines(gate, monkeypatch, tmp_path):
             break
         time.sleep(0.02)
     assert len(gate.log_path.read_text().splitlines()) == 1
+
+
+def test_opus_runs_on_its_own_login_and_other_models_on_the_main_one():
+    gate = Gate("127.0.0.1", 0, env={"CLAUDE_CODE_OAUTH_TOKEN": "main-token", "CLAUDE_CODE_OAUTH_TOKEN_OPUS": "opus-token"})
+    assert gate.upstream_auth("anthropic", {}, "claude-opus-5-5")["Authorization"] == "Bearer opus-token"
+    assert gate.upstream_auth("anthropic", {}, "claude-sonnet-5-5")["Authorization"] == "Bearer main-token"
+    assert gate.upstream_auth("anthropic", {}, "claude-haiku-4-5")["Authorization"] == "Bearer main-token"
+    alone = Gate("127.0.0.1", 0, env={"CLAUDE_CODE_OAUTH_TOKEN": "main-token"})
+    assert alone.upstream_auth("anthropic", {}, "claude-opus-5-5")["Authorization"] == "Bearer main-token"
+
+
+def test_a_login_out_of_its_usage_window_is_paused_until_it_resets():
+    gate = Gate("127.0.0.1", 0, env={"CLAUDE_CODE_OAUTH_TOKEN": "a", "CLAUDE_CODE_OAUTH_TOKEN_OPUS": "b"})
+    gate.claude_fallback = False                                          # waiting, not borrowing (tested below)
+    gate.claude_limited("claude-sonnet-5-5", {"anthropic-ratelimit-unified-reset": str(int(time.time()) + 600)})
+    assert 590 < gate.claude_paused("claude-haiku-4-5") <= 600          # the same (main) login
+    assert gate.claude_paused("claude-opus-5-5") == 0                     # Opus's own login is fine
+    gate.claude_limited("claude-opus-5-5", {"retry-after": "30"})
+    assert 0 < gate.claude_paused("claude-opus-5-5") <= 30
+
+
+def test_other_models_borrow_the_opus_login_until_the_main_one_resets():
+    gate = Gate("127.0.0.1", 0, env={"CLAUDE_CODE_OAUTH_TOKEN": "pro", "CLAUDE_CODE_OAUTH_TOKEN_OPUS": "team"})
+    gate.claude_limited("claude-sonnet-5-5", {"retry-after": "600"})                    # Pro is out of its window
+    assert gate.upstream_auth("anthropic", {}, "claude-sonnet-5-5")["Authorization"] == "Bearer team"
+    assert gate.claude_paused("claude-sonnet-5-5") == 0                                  # so nothing has to wait
+    gate.claude_pauses["main"] = time.time() - 1                                         # Pro's reset time has passed
+    assert gate.upstream_auth("anthropic", {}, "claude-sonnet-5-5")["Authorization"] == "Bearer pro"
+    gate.claude_pauses.update(main=time.time() + 600, opus=time.time() + 300)            # both out: wait for the first
+    assert 0 < gate.claude_paused("claude-sonnet-5-5") <= 300
+    gate.claude_fallback = False
+    gate.claude_pauses.pop("opus")
+    assert gate.upstream_auth("anthropic", {}, "claude-sonnet-5-5")["Authorization"] == "Bearer pro"
+
+
+def test_the_owner_is_told_when_a_login_runs_out_and_when_it_is_back():
+    told = []
+    gate = Gate("127.0.0.1", 0, env={"CLAUDE_CODE_OAUTH_TOKEN": "pro", "CLAUDE_CODE_OAUTH_TOKEN_OPUS": "team"})
+    gate.on_claude_switch = told.append
+    gate.claude_limited("claude-sonnet-5-5", {"retry-after": "600"})
+    assert "primary account hit its usage limit" in told[-1] and "use the Opus account" in told[-1]
+    gate.claude_pauses["main"] = time.time() - 1
+    gate.upstream_auth("anthropic", {}, "claude-sonnet-5-5")
+    assert "back on it" in told[-1] and len(told) == 2
+    gate.upstream_auth("anthropic", {}, "claude-sonnet-5-5")
+    assert len(told) == 2                                                 # said once
+    gate.claude_limited("claude-opus-5-5", {"retry-after": "60"})
+    assert "the Opus account hit its usage limit" in told[-1]
+
+
+def test_a_late_429_pauses_the_login_it_went_out_on():
+    told = []
+    gate = Gate("127.0.0.1", 0, env={"CLAUDE_CODE_OAUTH_TOKEN": "pro", "CLAUDE_CODE_OAUTH_TOKEN_OPUS": "team"})
+    gate.on_claude_switch = told.append
+    gate.claude_limited("claude-sonnet-5-5", {"retry-after": "600"}, "main")
+    gate.claude_limited("claude-sonnet-5-5", {"retry-after": "900"}, "main")    # a request sent before the switch
+    assert gate.claude_pauses.get("opus", 0) == 0 and len(told) == 1
+    assert gate.upstream_auth("anthropic", {}, "claude-sonnet-5-5")["Authorization"] == "Bearer team"
+
+
+def test_an_api_key_429_is_not_a_login_running_out():
+    gate = Gate("127.0.0.1", 0, env={"ANTHROPIC_API_KEY": "key", "CLAUDE_CODE_OAUTH_TOKEN": "pro"})
+    assert gate.claude_login("anthropic", "claude-sonnet-5-5") is None
+    assert gate.claude_login("nvidia", "x") is None
+    assert Gate("127.0.0.1", 0, env={"CLAUDE_CODE_OAUTH_TOKEN": "pro"}).claude_login("anthropic", "x") == "main"

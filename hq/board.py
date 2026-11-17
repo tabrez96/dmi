@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS products (
     github_repo  TEXT,                       -- owner/name of the product's GitHub repo
     setup_prs    TEXT NOT NULL DEFAULT '',   -- JSON: the README / design pull requests a new repo starts with
     ci_cursor    INTEGER NOT NULL DEFAULT 0, -- id of the last failed develop build HQ has acted on
+    ci_cursors   TEXT NOT NULL DEFAULT '{}',  -- JSON {workflow: id of its newest develop run HQ has seen}
+    tickets_made INTEGER NOT NULL DEFAULT 1,  -- 0 while the approved plan's tickets are being filed
     canvas_url   TEXT,                       -- the Claude Design canvas (artifact) PM reviews the screens in
     checklist_msg_id TEXT,                   -- the "what's next" message in that channel (edited as stages complete)
     claimed_by   TEXT,
@@ -76,6 +78,7 @@ CREATE TABLE IF NOT EXISTS tickets (
     worktree       TEXT,
     thread_id      TEXT,
     created_by     TEXT NOT NULL,
+    plan_key       TEXT,                        -- the entry of the approved plan it was filed from
     claimed_by     TEXT,
     lease_until    REAL,
     created_at     REAL NOT NULL,
@@ -222,14 +225,14 @@ class Board:
     # -- tickets --------------------------------------------------------------
 
     def create(self, title, description="", state=policy.APPROVED, actor="pm",
-               product_id=None, depends_on=(), ui=False, builder=""):
+               product_id=None, depends_on=(), ui=False, builder="", plan_key=None):
         now = time.time()
         with self._transaction() as conn:
             tid = conn.execute(
                 "INSERT INTO tickets (product_id, title, description, state, depends_on, ui, builder,"
-                " created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " created_by, plan_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (product_id, title, description, state, json.dumps(list(depends_on)), int(ui), builder,
-                 actor, now, now),
+                 actor, plan_key, now, now),
             ).lastrowid
             self._insert_event(conn, tid, actor, "created", to_state=state)
         self._emit("ticket_event", ticket=tid, actor=actor, event="created", from_state=None, to_state=state, note=None)
@@ -243,6 +246,44 @@ class Board:
 
     def update(self, tid, **fields):
         self._update("ticket", tid, **fields)
+
+    def split(self, tid, parts, actor, to_state=None, **narrowed):
+        """A ticket split in two or more, in one transaction (all of it lands, or none): `parts` (dicts with title,
+        description, ui) are filed as tickets built one after another from `tid`; what waited for the whole ticket also
+        waits for the last part; and `tid` is narrowed to the first part (the `narrowed` fields, and `to_state` if it
+        moves too). -> the new tickets' ids."""
+        now = time.time()
+        with self._transaction() as conn:
+            row = conn.execute("SELECT state, product_id FROM tickets WHERE id = ?", (tid,)).fetchone()
+            if row is None:
+                raise KeyError(f"no ticket T{tid}")
+            made, after = [], tid
+            for part in parts:
+                after = conn.execute(
+                    "INSERT INTO tickets (product_id, title, description, state, depends_on, ui, builder, created_by,"
+                    " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (row["product_id"], part["title"], part["description"], policy.APPROVED, json.dumps([after]),
+                     int(bool(part.get("ui"))), "", actor, now, now)).lastrowid
+                self._insert_event(conn, after, actor, "created", to_state=policy.APPROVED)
+                made.append(after)
+            same = ("SELECT id, depends_on FROM tickets WHERE product_id = ?", (row["product_id"],)) \
+                if row["product_id"] is not None else ("SELECT id, depends_on FROM tickets", ())
+            for waiting in conn.execute(*same).fetchall():
+                deps = json.loads(waiting["depends_on"] or "[]")
+                if tid in deps and waiting["id"] not in made and after not in deps:
+                    conn.execute("UPDATE tickets SET depends_on = ?, updated_at = ? WHERE id = ?",
+                                 (json.dumps(deps + [after]), now, waiting["id"]))
+            if to_state:
+                policy.check(row["state"], to_state)
+                narrowed.update(state=to_state, attempts=0)
+                self._insert_event(conn, tid, actor, "transition", row["state"], to_state, "split: plan the first part afresh")
+            narrowed["updated_at"] = now
+            conn.execute(f"UPDATE tickets SET {', '.join(f'{column} = ?' for column in narrowed)} WHERE id = ?",
+                         (*narrowed.values(), tid))
+        for new in made:
+            self._emit("ticket_event", ticket=new, actor=actor, event="created", from_state=None,
+                       to_state=policy.APPROVED, note=None)
+        return made
 
     def transition(self, tid, to_state, actor, note=None, **fields):
         with self._transaction() as conn:     # the check, the move and its history event: all or nothing

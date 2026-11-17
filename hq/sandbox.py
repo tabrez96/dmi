@@ -61,6 +61,7 @@ class Sandbox:
         self._memory_lock, self._booting = threading.Lock(), []     # (started at, MB) of launches still settling
         self.gate = gate
         self.runs_dir = Path(state_dir) / "runs"
+        self.gradle_cache = Path(state_dir) / "cache" / "gradle"    # downloaded libraries, kept between runs, per product
         self.tools_dir = ROOT / "tools"
 
     # -- health --
@@ -197,8 +198,11 @@ class Sandbox:
             d = Path(d).resolve()
             if d.exists() and d != cwd:
                 args += ["-v", f"{d}:{d}:ro"]
+        android = "/opt/android-sdk"
         env = {"HOME": "/home/agent", "DMI_GATE": self.gate_url, "DMI_RUN_TOKEN": token, "PI_OFFLINE": "1",
-               "PATH": f"{self.tools_dir}:/opt/swift/usr/bin:/usr/local/bin:/usr/bin:/bin"}
+               "JAVA_HOME": "/usr/lib/jvm/java-17-openjdk-amd64", "ANDROID_HOME": android, "ANDROID_SDK_ROOT": android,
+               "PATH": f"{self.tools_dir}:/opt/swift/usr/bin:/opt/gradle/bin:{android}/cmdline-tools/latest/bin:"
+                       f"{android}/platform-tools:/usr/local/bin:/usr/bin:/bin"}
         if harness_name == "claude":
             env.update({"ANTHROPIC_BASE_URL": f"{self.gate_url}/llm/anthropic", "ANTHROPIC_AUTH_TOKEN": token,
                         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_AUTOUPDATER": "1",
@@ -207,9 +211,35 @@ class Sandbox:
             proxy = f"http://dmi:{token}@{self.gate_host}:{self.gate_url.rsplit(':', 1)[1]}"
             env.update({"HTTPS_PROXY": proxy, "HTTP_PROXY": proxy, "https_proxy": proxy, "http_proxy": proxy,
                         "NO_PROXY": self.gate_host, "no_proxy": self.gate_host})
+            port = self.gate_url.rsplit(":", 1)[1]
+            # Java ignores HTTPS_PROXY: Gradle gets the same gate, token and all, as JVM properties
+            env["JAVA_TOOL_OPTIONS"] = " ".join(
+                f"-D{scheme}.{key}={value}" for scheme in ("https", "http")
+                for key, value in (("proxyHost", self.gate_host), ("proxyPort", port), ("proxyUser", "dmi"),
+                                   ("proxyPassword", token))) + (
+                f" -Dhttp.nonProxyHosts={self.gate_host} -Djdk.http.auth.tunneling.disabledSchemes=")
+            env["GRADLE_USER_HOME"] = "/home/agent/.gradle"
+            args += ["-v", f"{self.gradle_home(git_common or cwd)}:/home/agent/.gradle:rw"]
         for k, v in env.items():
             args += ["-e", f"{k}={v}"]
         return args + [self.image]
+
+    # What Gradle runs on every build from its home, rather than from the repo (where a pull request shows it)
+    GRADLE_HOME_CODE = ("init.gradle", "init.gradle.kts", "init.d", "gradle.properties")
+
+    def gradle_home(self, repo):
+        """The Gradle home a run on `repo` mounts: one per product (a run can't reach another product's), and cleared
+        of init scripts and properties first, so nothing a run leaves there runs in a later one unreviewed."""
+        repo = Path(repo)
+        home = self.gradle_cache / (repo.parent.name if repo.name == ".git" else repo.name)
+        home.mkdir(parents=True, exist_ok=True)
+        for name in self.GRADLE_HOME_CODE:
+            planted = home / name
+            if planted.is_dir() and not planted.is_symlink():
+                shutil.rmtree(planted)
+            elif planted.exists() or planted.is_symlink():
+                planted.unlink()
+        return home
 
     @staticmethod
     def _restore_file(path, content):

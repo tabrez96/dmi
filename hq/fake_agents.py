@@ -78,6 +78,8 @@ def run(role, subject, prompt, cwd, log_path):
         else:
             result["message"] = "The logo works; no changes."
     elif role == "designer" and is_product:
+        if "[feature]" in tag and "Rework log" not in prompt:          # the owner asked for something new
+            result["brief_additions"] = ["Rework log: track alterations after delivery"]
         design = out / "design"
         if subject["state"] == "ux_designing":
             (design / "screens" / "S01-dashboard").mkdir(parents=True, exist_ok=True)
@@ -120,7 +122,7 @@ def run(role, subject, prompt, cwd, log_path):
         (out / "tickets.json").write_text(json.dumps([
             {"key": "core", "title": "Core data model", "description": "Tables.", "acceptance_criteria": [], "depends_on": []},
             {"key": "export", "title": "Export to CSV", "description": "Split out of the commands.",
-             "acceptance_criteria": ["file written"], "depends_on": ["core"]},
+             "acceptance_criteria": ["file written"], "depends_on": ["core"], "covers": ["S01"]},
         ]))
         result.update(verdict="done", message="Split the export into its own ticket.")
     elif role == "architect":
@@ -137,6 +139,10 @@ def run(role, subject, prompt, cwd, log_path):
         skip_all = "[cr-skip]" in tag
         result.update(fix=[] if skip_all else [1], message="Triaged.",
                       skip=[{"id": i, "reason": "style only"} for i in range(1 if skip_all else 2, comment_count + 1)])
+    elif role == "planner" and "[split]" in tag and "Part 1 of" not in (subject.get("description") or ""):
+        result.update(status="split", message="Too big for one pull request.", tickets=[
+            {"title": "Export data", "description": "The data side.", "acceptance_criteria": ["rows come out"]},
+            {"title": "Export page", "description": "The page.", "acceptance_criteria": ["a button"]}])
     elif role == "planner":
         (out / "plan.md").write_text(f"# Plan for T-{subject['id']}\n\n1. Create feature file.\n\n"
                                      "## Acceptance criteria\n- feature file exists\n")

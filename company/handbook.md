@@ -53,5 +53,6 @@ For a language not listed, choose that ecosystem's standard formatter and say wh
 
 Every pull request into a product changes **under 500 lines** (code and tests; lockfiles and generated files such as
 screenshots don't count). Anything bigger can't be reviewed properly. The architect sizes tickets to fit; the planner
-doesn't plan a ticket that can't fit, and says how to split it instead; the engineer stops and asks the architect
-rather than going over.
+doesn't plan a ticket that can't fit and splits it instead (HQ files every part as a ticket, built in order); the
+engineer stops and asks the architect rather than going over. The architect's tickets must cover every item of the
+brief and every screen; a feature the owner adds later goes into the brief first, so it gets planned too.

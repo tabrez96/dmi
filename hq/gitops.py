@@ -351,6 +351,17 @@ def sync_main(repo, url, env):
         raise GitError(f"local develop has commits that aren't on GitHub (they need a pull request):\n{local}")
 
 
+def squash_range(repo, base, tip, message, author):
+    """One commit on `base` with `tip`'s files: a pull request's commits as the single commit the rules ask for.
+    -> its hash (`tip` itself when there is only one commit)."""
+    if int(git(repo, "rev-list", "--count", f"{base}..{tip}").stdout.strip() or 0) <= 1:
+        return git(repo, "rev-parse", tip).stdout.strip()
+    name, email = author.rsplit(" <", 1)
+    who = {"GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email.rstrip(">"),
+           "GIT_COMMITTER_NAME": name, "GIT_COMMITTER_EMAIL": email.rstrip(">")}
+    return git(repo, "commit-tree", f"{tip}^{{tree}}", "-p", base, "-m", message, env=who).stdout.strip()
+
+
 def replay_on_remote(repo, url, env, base, tip):
     """The commits `base..tip`, replayed on GitHub's develop as it is now (a pull request after an earlier one was
     merged, possibly rewritten by a rebase merge). -> the new tip. Raises GitError if they don't apply cleanly."""

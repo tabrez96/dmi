@@ -35,7 +35,12 @@ UPSTREAMS = {
     "openrouter": "https://openrouter.ai/api",
     "anthropic": "https://api.anthropic.com",
 }
-PACKAGE_HOSTS = {"pypi.org", "files.pythonhosted.org", "registry.npmjs.org"}
+PACKAGE_HOSTS = {"pypi.org", "files.pythonhosted.org", "registry.npmjs.org",
+                 # Gradle and Android: the wrapper, the plugin portal, Maven Central and Google's Maven
+                 "services.gradle.org", "downloads.gradle.org", "plugins.gradle.org", "plugins-artifacts.gradle.org",
+                 "repo.maven.apache.org", "repo1.maven.org", "dl.google.com", "maven.google.com",
+                 # Gradle's distributions redirect to GitHub releases
+                 "github.com", "release-assets.githubusercontent.com"}
 HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers",
        "transfer-encoding", "upgrade", "host", "content-length", "authorization", "x-api-key"}
 IP_FREEBIND = getattr(socket, "IP_FREEBIND", 15)    # Linux: bind an address the host doesn't have yet
@@ -121,6 +126,8 @@ class Gate:
         self.upstreams = dict(upstreams or UPSTREAMS)
         self.env = env if env is not None else os.environ
         self.grants = {}
+        self.claude_pauses = {}       # login ("opus" | "main") -> when its usage window resets
+        self.login_names = {"main": "the primary account", "opus": "the Opus account"}   # in the switch notices
         self.log_path = Path(log_path) if log_path else None
         self._lock = threading.Lock()
         self.server = None
@@ -143,7 +150,81 @@ class Gate:
 
     # -- upstream credentials (never leave this process) --
 
-    def upstream_auth(self, provider, headers):
+    claude_fallback = True   # the primary account out of its window: other models borrow the Opus account until it resets
+    on_claude_switch = None  # callable(text): told when a login runs out, and when the main one is back
+
+    def claude_account(self, model):
+        """Which Claude login a model runs on now: Opus on CLAUDE_CODE_OAUTH_TOKEN_OPUS when it is set, every other
+        model (and Opus without it) on CLAUDE_CODE_OAUTH_TOKEN. While the primary account is out of its usage window and
+        the Opus one isn't, the other models borrow the Opus account; from the primary account's reset time on (checked on
+        every request), they are back on it. -> "opus" | "main"."""
+        has_opus = bool(self.env.get("CLAUDE_CODE_OAUTH_TOKEN_OPUS"))
+        if has_opus and "opus" in (model or "").lower():
+            return "opus"
+        now = time.time()
+        if (self.claude_fallback and has_opus and self.claude_pauses.get("main", 0) > now
+                and self.claude_pauses.get("opus", 0) <= now):
+            return "opus"
+        if self._borrowing and self.claude_pauses.get("main", 0) <= now:      # its reset time has come
+            self._borrowing = False
+            self._tell(f"Claude: {self.login_names['main']}'s limit has reset; Sonnet and Haiku are back on it.")
+        return "main"
+
+    _borrowing = False
+
+    def _tell(self, text):
+        if self.on_claude_switch:
+            try:
+                self.on_claude_switch(text)
+            except Exception:  # noqa: BLE001, S110 - a notice must never break a request
+                pass
+
+    def claude_login(self, provider, model):
+        """The Claude login a request goes out on ("main" | "opus"), or None when it isn't a Claude login at all (another
+        provider, or an ANTHROPIC_API_KEY, whose limits aren't a usage window)."""
+        if provider != "anthropic" or self.env.get("ANTHROPIC_API_KEY"):
+            return None
+        return self.claude_account(model)
+
+    def claude_limited(self, model, headers, account=None):
+        """Anthropic answered 429: that login (`account`, the one the request went out on) is out of its usage window.
+        Remember until when (its reset header, or 15 minutes), so HQ starts nothing more on it until then instead of
+        failing ticket after ticket."""
+        reset = headers.get("anthropic-ratelimit-unified-reset") or ""
+        retry = headers.get("retry-after") or ""
+        now = time.time()
+        if reset.isdigit():
+            until = float(reset)
+        elif retry.replace(".", "", 1).isdigit():
+            until = now + float(retry)
+        else:
+            until = now + 900
+        with self._lock:
+            account = account or self.claude_account(model)
+            self.claude_pauses[account] = max(self.claude_pauses.get(account, 0), min(until, now + 6 * 3600))
+            at = time.strftime("%H:%M", time.localtime(self.claude_pauses[account]))
+            main, opus = self.login_names["main"], self.login_names["opus"]
+            if account == "opus":
+                self._tell(f"Claude: {opus} hit its usage limit; Opus work waits until about {at}.")
+            elif self.claude_account(model) == "opus":           # the fallback takes over
+                if not self._borrowing:                          # a later 429 from a request already out says nothing new
+                    self._tell(f"Claude: {main} hit its usage limit; Sonnet and Haiku use {opus} until {main} resets "
+                               f"at about {at}, then switch back.")
+                self._borrowing = True
+            else:
+                self._tell(f"Claude: {main} hit its usage limit; its work waits until about {at}.")
+
+    def claude_paused(self, model):
+        """Seconds until the login `model` runs on may be used again (0 = now)."""
+        with self._lock:
+            now = time.time()
+            wait = max(0.0, self.claude_pauses.get(self.claude_account(model), 0) - now)
+            if (wait and self.claude_fallback and self.env.get("CLAUDE_CODE_OAUTH_TOKEN_OPUS")
+                    and "opus" not in (model or "").lower()):      # it may use whichever login frees up first
+                wait = min(wait, max(0.0, self.claude_pauses.get("opus", 0) - now))
+            return wait
+
+    def upstream_auth(self, provider, headers, model="", account=None):
         env = self.env
         if provider == "nvidia" and env.get("NVIDIA_API_KEY"):
             return {"Authorization": f"Bearer {env['NVIDIA_API_KEY']}"}
@@ -152,12 +233,13 @@ class Gate:
         if provider == "anthropic":
             if env.get("ANTHROPIC_API_KEY"):
                 return {"x-api-key": env["ANTHROPIC_API_KEY"]}
-            if env.get("CLAUDE_CODE_OAUTH_TOKEN"):
+            token = env.get("CLAUDE_CODE_OAUTH_TOKEN_OPUS" if (account or self.claude_account(model)) == "opus"
+                            else "CLAUDE_CODE_OAUTH_TOKEN")
+            if token:
                 betas = [beta.strip() for beta in (headers.get("anthropic-beta") or "").split(",") if beta.strip()]
                 if "oauth-2025-04-20" not in betas:
                     betas.append("oauth-2025-04-20")
-                return {"Authorization": f"Bearer {env['CLAUDE_CODE_OAUTH_TOKEN']}",
-                        "anthropic-beta": ",".join(betas)}
+                return {"Authorization": f"Bearer {token}", "anthropic-beta": ",".join(betas)}
         return None
 
     def brave_key(self):
@@ -293,14 +375,21 @@ class _Handler(BaseHTTPRequestHandler):
         grant = self._authorized(lambda grant: provider in grant.providers)
         if not grant:
             return
-        auth = self.gate.upstream_auth(provider, self.headers)
+        body = self._body()
+        model = ""
+        if provider == "anthropic" and body:
+            try:
+                model = str(json.loads(body).get("model") or "")
+            except (ValueError, AttributeError):
+                model = ""
+        account = self.gate.claude_login(provider, model)        # held for the reply: a 429 pauses this login
+        auth = self.gate.upstream_auth(provider, self.headers, model, account)
         if auth is None:
             return self._deny(503, f"HQ has no credentials for {provider}", grant.label)
         base = urllib.parse.urlsplit(self.gate.upstreams[provider])
         target = base.path.rstrip("/") + rest + (f"?{query}" if query else "")
         headers = {name: value for name, value in self.headers.items() if name.lower() not in HOP}
         headers.update(auth)
-        body = self._body()
         conn_cls = _V4FirstHTTPS if base.scheme == "https" else _V4FirstHTTP
         conn = conn_cls(base.hostname, base.port, timeout=600)
         replying = False
@@ -308,6 +397,8 @@ class _Handler(BaseHTTPRequestHandler):
             conn.request(self.command, target, body=body, headers=headers)
             resp = conn.getresponse()
             replying = True
+            if account and resp.status == 429:
+                self.gate.claude_limited(model, {name.lower(): value for name, value in resp.getheaders()}, account)
             self.send_response(resp.status)
             for name, value in resp.getheaders():
                 if name.lower() not in HOP:
@@ -382,6 +473,12 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_text(text, grant.label, f"fetch {url[:80]!r}")   # repr: no newlines into the log
 
     def do_CONNECT(self):
+        if not self._token():         # Java (Gradle) only sends proxy credentials when asked for them
+            self.send_response(407, "Proxy Authentication Required")
+            self.send_header("Proxy-Authenticate", 'Basic realm="dmi"')
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         host, _, port = self.path.partition(":")
         registry = host in PACKAGE_HOSTS and port == "443"
         grant = self._authorized(lambda grant: grant.packages and registry,

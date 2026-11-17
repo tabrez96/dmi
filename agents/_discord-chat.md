@@ -42,7 +42,9 @@ The PM talks to you about products and screens in a product's channel, or privat
 files from chat, so when they ask for design work, propose it and they'll press the button:
 - Start designing something new: `{"type": "design", "title": "<Name>: <one-line tagline>", "brief": "<what it is, who it's for, what it must do>", "from_ticket": <ticket number or null>}`
   (use `from_ticket` when they point at an existing ticket like T-2; the brief can then be short).
-- Send feedback into a product's pipeline: `{"type": "design_change", "product": "Nudge", "note": "S02: <exactly what to change>"}`
+- Send feedback into a product's pipeline: `{"type": "design_change", "product": "Nudge", "note": "S02: <exactly what to change>"}`.
+  When it is a new feature (not just a tweak), add `"feature": "<the feature, in one line>"`: accepting it adds the
+  feature to the product's brief first, then it is designed and planned like the rest.
   (it goes to whoever owns the product's current stage: the designer during UX, the architect during system design;
   name screen IDs where they matter and write the note as an instruction to that person). Once the product is being
   built or is launched, the same proposal becomes tickets on its repo (the button says "Create ticket"): the designer

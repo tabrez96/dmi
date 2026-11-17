@@ -33,6 +33,27 @@ RUN pip install --no-cache-dir --break-system-packages "uv==${UV_VERSION}" \
  && uv python list --only-installed \
  && rm -rf /tmp/uv-cache
 
+# Java, Gradle and the Android SDK, so agents can build and test Android apps (Kotlin, Compose) the way they build
+# Swift and Python ones. The VM's filesystem is read-only, so every SDK package a build needs is installed here;
+# libraries (Maven, Google, the Gradle plugin portal) still come through the gate's allowlist.
+ARG GRADLE_VERSION=8.14.3
+ARG ANDROID_CMDLINE_TOOLS=13114758
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ANDROID_HOME=/opt/android-sdk ANDROID_SDK_ROOT=/opt/android-sdk
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openjdk-17-jdk-headless unzip \
+ && rm -rf /var/lib/apt/lists/* \
+ && curl -fsSL "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" -o /tmp/gradle.zip \
+ && unzip -q /tmp/gradle.zip -d /opt && mv "/opt/gradle-${GRADLE_VERSION}" /opt/gradle && rm /tmp/gradle.zip \
+ && mkdir -p "${ANDROID_HOME}/cmdline-tools" \
+ && curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-${ANDROID_CMDLINE_TOOLS}_latest.zip" -o /tmp/tools.zip \
+ && unzip -q /tmp/tools.zip -d "${ANDROID_HOME}/cmdline-tools" \
+ && mv "${ANDROID_HOME}/cmdline-tools/cmdline-tools" "${ANDROID_HOME}/cmdline-tools/latest" && rm /tmp/tools.zip \
+ && yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null \
+ && "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-35" "platforms;android-36" \
+      "build-tools;34.0.0" "build-tools;35.0.0" "build-tools;36.0.0" >/dev/null \
+ && chmod -R a+rX "${ANDROID_HOME}" /opt/gradle
+ENV PATH="/opt/gradle/bin:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${PATH}"
+
 # Non-root agent user (uid 1000, matching the host user that owns the worktrees).
 RUN userdel -r node 2>/dev/null; useradd -m -u 1000 -s /bin/bash agent
 COPY tools/ /opt/dmi/tools/

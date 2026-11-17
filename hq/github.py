@@ -157,10 +157,27 @@ class GitHub:
             page += 1
         return bool(mine) and mine[0].get("state") == "success" and "completed" in (mine[0].get("description") or "").lower()
 
-    def merge_pr(self, slug, number, title, method="rebase"):
+    def merge_pr(self, slug, number, title, method="rebase", sha=None):
         """Rebase (default) or squash: the branch is already one commit, so either leaves a linear history with
-        no merge commit. 'rebase' keeps the engineer as the commit's author."""
-        self._call("PUT", f"/repos/{slug}/pulls/{number}/merge", {"merge_method": method, "commit_title": title})
+        no merge commit. 'rebase' keeps the engineer as the commit's author. `sha`: GitHub merges only if the PR's
+        head is still that commit (what was checked), and refuses otherwise."""
+        self._call("PUT", f"/repos/{slug}/pulls/{number}/merge",
+                   {"merge_method": method, "commit_title": title, **({"sha": sha} if sha else {})})
+
+    def head_runs(self, slug, sha):
+        """Every workflow run on a commit (each workflow's newest): [{"name", "status", "conclusion"}]."""
+        runs, page = [], 1
+        while True:                                      # runs come in pages of 100; read them all
+            batch = self._call("GET", f"/repos/{slug}/actions/runs?head_sha={sha}&per_page=100&page={page}")
+            runs += batch.get("workflow_runs") or []
+            if len(runs) >= (batch.get("total_count") or 0) or len(batch.get("workflow_runs") or []) < 100:
+                break
+            page += 1
+        newest = {}
+        for run in sorted(runs, key=lambda run: run["id"]):
+            newest[run.get("workflow_id") or run.get("name")] = run
+        return [{"name": run.get("name") or "CI", "status": run["status"], "conclusion": run.get("conclusion")}
+                for run in newest.values()]
 
     def comment_pr(self, slug, number, body):
         self._call("POST", f"/repos/{slug}/issues/{number}/comments", {"body": body[:59000] + "\n\n" + HQ_MARK})
