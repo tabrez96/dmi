@@ -41,3 +41,12 @@ def test_review_finished_reads_every_status_page():
     assert client.review_finished("me/app", "abc")
     pages[2] = [{"context": "CodeRabbit", "state": "success", "description": "Review rate limited"}]
     assert not client.review_finished("me/app", "abc")
+
+
+def test_head_runs_reads_every_page():
+    client = github_api.GitHub("token")
+    lint = [{"id": i, "workflow_id": 1, "name": "Lint", "status": "completed", "conclusion": "success"} for i in range(100)]
+    pages = {1: lint, 2: [{"id": 200, "workflow_id": 2, "name": "Tests", "status": "completed", "conclusion": "failure"}]}
+    client._call = lambda method, path: {"total_count": 101, "workflow_runs": pages[int(path.rsplit("page=", 1)[1])]}
+    assert sorted((run["name"], run["conclusion"]) for run in client.head_runs("me/app", "abc")) == \
+        [("Lint", "success"), ("Tests", "failure")]

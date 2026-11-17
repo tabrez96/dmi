@@ -12,6 +12,9 @@ lease_seconds: 3600          # a claimed item is freed after this if HQ dies mid
 ask_stack: true              # the architect asks you which tech stack to use before he designs the system
 validate_ideas: true         # an idea you bring goes to the analyst first (questions, then a brief you approve)
 max_attempts: 2              # crashed/invalid runs per step before -> blocked
+claude_fallback: true       # the primary account (CLAUDE_CODE_OAUTH_TOKEN) out of its usage window: Sonnet/Haiku borrow the
+                             # Opus account (..._OPUS) until it resets, then back. false = wait for the reset instead.
+                             # Sandboxed (Kata) runs only: the gate does this; a host run keeps its login
 
 conversation:
   max_rounds: 3              # agent<->agent rounds before the Manager (then you) steps in
@@ -19,10 +22,14 @@ conversation:
 
 github:
   merge_method: rebase       # rebase | squash. Never a merge commit; each ticket is one commit on main
+  auto_merge: true           # Michael merges a ticket's PR once its build is green and CodeRabbit's review of the
+                             # latest commit left nothing worth fixing (comments left for the PM keep it waiting)
   coderabbit:                # CodeRabbit's review of a ticket's PR: the planner triages it, the engineer fixes only what's worth it
     enabled: true
     bot: coderabbitai[bot]
     max_rounds: 2            # times the reviewers (CodeRabbit and Kody together) may send a ticket back; after that the PM reads the PR
+    retry_hours: 1           # its review rate limited or stuck this long: HQ comments `@coderabbitai review` on the PR (0 = never)
+    max_retries: 5           # tries per ticket before HQ leaves it to the PM
   kody:                      # Kody (Kodus), a second reviewer: its comments take the same path as CodeRabbit's
     enabled: true
     bot: kody-ai[bot]
@@ -59,7 +66,7 @@ safety:
   chat_tools: read           # read = chat can read the product repos, read-only, in a microVM; none = no file access
 
 sandbox:
-  image: dmi-agent:2         # built by sandbox/build.sh
+  image: dmi-agent:3         # built by sandbox/build.sh
   network: dmi-agents        # locked down by sandbox/network.sh: VMs can reach the gate and nothing else
   gate: {listen: 0.0.0.0, ip: 10.88.77.1, port: 8787}
   vm: {cpus: 2, memory_mb: 2048}      # default size; roles can override with `vm:`
@@ -214,7 +221,7 @@ roles:
     tools: [Read, Grep, Glob, Write, "Bash(git log:*)", "Bash(ls:*)"]
     timeout_minutes: 30
     max_usd_per_run: 3
-    max_runs_per_day: 40
+    max_runs_per_day: 60             # plans, answers and triages every review: two products building at once need more
 
   engineer:                        # was Nemotron (free); Sonnet writes the code now, for quality
     harness: claude

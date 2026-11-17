@@ -42,6 +42,8 @@ def test_readme_about_block_is_refreshed_and_the_crews_text_kept():
     assert "## What it does\n\nFerret reads your card statements" in about
     assert "- Totals per currency" in about and "![S01 Home](design/screens/S01/screen.png)" in about
     assert "## Built with" in about
+    linked = readme.render_about("Ferret: card spending", "building", website="https://dmi.tabrez.xyz/p/ferret")
+    assert "Website: [dmi.tabrez.xyz/p/ferret](https://dmi.tabrez.xyz/p/ferret)" in linked
     fresh = readme.merge("", about)
     assert fresh.startswith(readme.OPEN) and fresh.rstrip().endswith(readme.FOOTER) and readme.DEV_STUB in fresh
     edited = fresh.replace(readme.DEV_STUB, "## Development\n\nuv run pytest\n")

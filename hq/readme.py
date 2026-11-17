@@ -38,12 +38,15 @@ def _features(brief, limit=8):
     return features[:limit]
 
 
-def render_about(title, state, brief="", design="", screens=()):
-    """The HQ-managed block. `screens`: [{id, name, purpose, png (path relative to the repo)}]."""
+def render_about(title, state, brief="", design="", screens=(), website=""):
+    """The HQ-managed block. `screens`: [{id, name, purpose, png (path relative to the repo)}]; `website`: the
+    product's page on the Dunder Mifflin site."""
     name, tagline = split_title(title)
     lines = [f"# {name}", ""]
     if tagline:
         lines += [f"**{tagline}**", ""]
+    if website:
+        lines += [f"Website: [{website.split('://', 1)[-1]}]({website})", ""]
     what = _paragraph(_section(design, "Overview"))   # the architect writes it for users; a brief is market research, not a README
     if what:
         lines += ["## What it does", "", what, ""]

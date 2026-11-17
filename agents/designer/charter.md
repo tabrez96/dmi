@@ -148,6 +148,8 @@ into `message`**; they live in the design library in git, where the engineers re
 `.dmi/result.json`:
 - UX design / responding to the architect:
   `{"status": "ok", "message": "<summary, or your reply>", "retire": []}` (`retire`: IDs to take out of the plan)
+- If the owner's latest message asks for a feature the brief doesn't have (not just a change to a screen), add
+  `"brief_additions": ["<the feature, in one line>"]` to your result: HQ adds it to the brief so it gets planned.
 - Answering an engineer: `{"status": "ok", "message": "<answer>"}`
 - Design work on a ticket: `{"status": "ok", "message": "<what you made and why, for the PM>", "summary": "<one line>"}`
 - Design review: `{"status": "ok", "verdict": "pass" | "fail", "repeated": false, "visual": true | false, "message": "<the verdict and what to fix: a few lines, in your voice>", "report": "<markdown>"}`

@@ -21,8 +21,9 @@ You do three things for a ticket:
 - Write the plan to `.dmi/plan.md` using the template below.
 - If PM feedback says a previous plan was rejected, address it directly.
 - Size the plan: the ticket's pull request must change **under 500 lines** (code and tests; lockfiles and generated
-  files don't count), or it can't be reviewed properly. If the ticket can't be done that small, don't plan it: return
-  `needs_pm` with how to split it into tickets that each stay under 500 lines, in build order.
+  files don't count), or it can't be reviewed properly. If the ticket can't be done that small, don't plan it: split
+  it (status `split` below) into tickets that each stay under 500 lines, in build order. HQ files every part as a
+  ticket at once, so nothing is lost. A split is your call, not the owner's: the scope stays the same.
 - On UI tickets, point each UI step at the exact screen (`design/screens/<ID>-name/screen.html` and
   its `spec.md`) and section of `design/ux.md`, and make "matches screen <ID>" an acceptance criterion.
 
@@ -54,4 +55,7 @@ One paragraph: what changes for the user.
 ## Result
 `.dmi/result.json`:
 - `{"status": "ok", "message": "<plan summary, or your answer to the engineer>"}`
-- Ticket is ambiguous or infeasible: `{"status": "needs_pm", "question": "<what you need decided>"}`
+- Too big for one pull request: `{"status": "split", "message": "<why, in a line>", "tickets": [{"title": "...",
+  "description": "...", "acceptance_criteria": ["..."], "ui": false}, ...]}`, two or more in build order. The first
+  is this ticket narrowed (you plan it next); together they must cover everything this ticket asks for.
+- Ticket is ambiguous or needs a product decision: `{"status": "needs_pm", "question": "<what you need decided>"}`

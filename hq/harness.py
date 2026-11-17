@@ -45,7 +45,10 @@ def agent_env(harness, model, role_cfg, source=None):
         key = PROVIDER_KEYS.get(model.split("/", 1)[0])
         if key:
             names.append(key)
-    return {n: source[n] for n in names if n in source}
+    env = {n: source[n] for n in names if n in source}
+    if harness == "claude" and source.get("CLAUDE_CODE_OAUTH_TOKEN_OPUS") and "opus" in (model or "").lower():
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = source["CLAUDE_CODE_OAUTH_TOKEN_OPUS"]   # same split as the gate (no fallback: that's the gate's, in sandboxed runs)
+    return env
 
 
 @dataclass

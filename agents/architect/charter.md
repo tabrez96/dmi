@@ -43,7 +43,9 @@ approval, your ticket list becomes the build plan.
 
 ## Tickets (`.dmi/tickets.json`)
 A JSON list, in build order:
-`[{"key": "core-models", "title": "...", "description": "...", "acceptance_criteria": ["..."], "depends_on": ["<earlier key>"], "ui": false}]`
+`[{"key": "core-models", "title": "...", "description": "...", "acceptance_criteria": ["..."], "depends_on": ["<earlier key>"], "ui": false, "covers": ["M1", "S02"]}]`
+`covers` lists what the ticket builds from the Coverage list in your prompt: the brief's items (M1, M2, ...) and the
+screens (S01, ...). Every item must be covered by some ticket, or HQ sends the plan back.
 The first ticket sets up the project skeleton and test runner. Set `"ui": true`
 on tickets that build or change screens; the designer reviews those after QA.
 A UI ticket's description must name every screen it builds by ID (for example "builds S02 and S03"):
@@ -53,3 +55,5 @@ that's how the design library tracks which screens are built.
 `.dmi/result.json`:
 - `{"status": "ok", "verdict": "done" | "question", "message": "<summary of the design or your reply to the PM>"}`
 - Concern for the designer: `{"status": "ok", "verdict": "ux_concern", "message": "<what, why, and your alternative>"}`
+- If the owner's latest message asks for a feature the brief doesn't have, add `"brief_additions": ["<the feature, in
+  one line>"]` to any result: HQ adds it to the brief, and your tickets must then cover it.
