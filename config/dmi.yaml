@@ -221,7 +221,7 @@ roles:
     tools: [Read, Grep, Glob, Write, "Bash(git log:*)", "Bash(ls:*)"]
     timeout_minutes: 30
     max_usd_per_run: 3
-    max_runs_per_day: 60             # plans, answers and triages every review: two products building at once need more
+    max_runs_per_day: 100            # plans, answers and triages every review: two products building at once need more
 
   engineer:                        # was Nemotron (free); Sonnet writes the code now, for quality
     harness: claude

@@ -486,7 +486,7 @@ class HQ:
                     and self._may_start(t, started)):
                 self.board.transition(t["id"], policy.READY_FOR_DEV, "hq", "design work: the designer builds it, no plan needed")
         for role, state in policy.PICKUP:
-            if self._claude_paused(role):
+            if self._claude_paused(role) or self._waiting_for_runs(role):
                 continue
             for t in self.board.list([state]):
                 if self._ticket_due(role, t):
@@ -494,7 +494,7 @@ class HQ:
                         continue
                     jobs.append((self.ticket_turn, role, t["id"]))
         for p in self.board.products([policy.DISCOVERING, policy.UX_DESIGNING, policy.DESIGNING]):
-            if not self._claude_paused(self._speaker(p)):
+            if not (self._claude_paused(self._speaker(p)) or self._waiting_for_runs(self._speaker(p))):
                 jobs.append((self.product_turn, self._speaker(p), p["id"]))
         if self._discovery_due():
             pid = self.discover()
@@ -552,6 +552,28 @@ class HQ:
         """An HQ-wide notice for the owner (a Claude login running out or coming back): the log, and #needs-you."""
         self.say(text)
         self.announcements.append(text)
+
+    def _waiting_for_runs(self, role):
+        """True while a role has used its daily runs (`roles.<role>.max_runs_per_day`): its work waits where it is and
+        carries on as the runs from 24 hours ago drop off, the way it waits out a Claude usage limit. The owner is told
+        once each time, not every ticket blocked."""
+        said = self.__dict__.setdefault("_runs_said", set())
+        limit = self.cfg["roles"][role].get("max_runs_per_day")
+        started = sorted(run["started"] for run in self.board.runs_since(time.time() - 86400, role, chat=False))
+        if limit is None or len(started) < limit:                  # the same count as _over_budget, from one snapshot
+            said.discard(role)
+            return False
+        if role not in said:
+            who = team.name(team.member_for_role(self.cfg, role) or role)
+            if limit > 0:                   # the run whose expiry brings the count back under the cap
+                resume = time.strftime('%H:%M', time.localtime(started[len(started) - limit] + 86400))
+                when = f"carries on from about {resume}"
+            else:
+                when = "waits until the cap is raised"             # a cap of 0
+            self._announce(f"{who} ({role}) used today's {limit} runs; their work waits and {when}. "
+                           f"Raise roles.{role}.max_runs_per_day in config/dmi.yaml to go faster.")
+            said.add(role)
+        return True
 
     def _claude_paused(self, role):
         """True while the Claude login this role's model runs on is out of its usage window (the gate saw a 429)."""
@@ -745,7 +767,7 @@ class HQ:
             if not self._ticket_due(role, t):
                 return  # someone moved it since we listed it
             if self._over_budget(role):
-                return self._block_ticket(t, "hq", f"{role} hit its daily run limit.")
+                return                     # it waits where it is (see _waiting_for_runs)
             repo = self.repo_for(t)
             branch, wt = gitops.ensure_worktree(repo, self.workdir / repo.name, tid, t["branch"])
             self.board.update(tid, branch=branch, worktree=str(wt))
@@ -2025,7 +2047,7 @@ class HQ:
             if self._speaker(p) != role:
                 return
             if self._over_budget(role):
-                return self._block_product(p, f"{role} hit its daily run limit.")
+                return                     # it waits where it is (see _waiting_for_runs)
             cwd = self.workdir / f"P-{pid}"
             self._clear(cwd, "brief.md", "ux.md", "design.md", "tickets.json")
             if role == "designer":
