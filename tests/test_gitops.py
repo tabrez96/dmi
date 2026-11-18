@@ -366,3 +366,53 @@ def test_a_ticket_that_reverts_a_develop_commit_keeps_its_revert(repo, tmp_path)
                "HEAD")                                                  # its files now equal develop's older commit
     gitops.ensure_worktree(repo, tmp_path / "work", 73)
     assert not (worktree / "feature.py").exists()                       # the revert is the ticket's work: kept
+
+
+def test_a_push_that_couldnt_connect_is_tried_again(tmp_path, monkeypatch):
+    import subprocess as sp
+    calls = []
+
+    def flaky(args, **kwargs):
+        calls.append(args)
+        if len(calls) == 1:
+            return sp.CompletedProcess(args, 128, "", "fatal: unable to access 'https://github.com/x/y.git/': "
+                                       "Failed to connect to github.com port 443: Couldn't connect to server")
+        return sp.CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(gitops.subprocess, "run", flaky)
+    monkeypatch.setattr(gitops, "CONNECT_PAUSE", 0)
+    gitops.git(tmp_path, "push", "https://github.com/x/y.git", "a:b")
+    assert len(calls) == 2
+    calls.clear()
+    with pytest.raises(gitops.GitError):            # a real refusal fails at once
+        monkeypatch.setattr(gitops.subprocess, "run", lambda args, **kwargs: calls.append(args) or
+                            sp.CompletedProcess(args, 1, "", "! [rejected] (non-fast-forward)"))
+        gitops.git(tmp_path, "push", "https://github.com/x/y.git", "a:b")
+    assert len(calls) == 1
+
+
+def test_git_gives_up_after_four_tries_waiting_longer_each_time(tmp_path, monkeypatch):
+    import subprocess as sp
+    calls, pauses = [], []
+    monkeypatch.setattr(gitops.subprocess, "run", lambda args, **kwargs: calls.append(args) or
+                        sp.CompletedProcess(args, 128, "", "fatal: Could not resolve host: github.com"))
+    monkeypatch.setattr(gitops.time, "sleep", pauses.append)
+    with pytest.raises(gitops.GitError):
+        gitops.git(tmp_path, "fetch", "https://github.com/x/y.git")
+    assert len(calls) == 4 and pauses == [5, 10, 15]
+    calls.clear()
+    assert gitops.git(tmp_path, "fetch", "https://github.com/x/y.git", check=False).returncode == 128
+    assert len(calls) == 4
+
+
+def test_a_push_whose_connection_broke_midway_is_not_repeated(tmp_path, monkeypatch):
+    import subprocess as sp
+    calls = []
+    monkeypatch.setattr(gitops.subprocess, "run", lambda args, **kwargs: calls.append(args) or
+                        sp.CompletedProcess(args, 128, "", "fatal: Connection reset by peer"))
+    monkeypatch.setattr(gitops.time, "sleep", lambda seconds: None)
+    with pytest.raises(gitops.GitError):
+        gitops.git(tmp_path, "push", "https://github.com/x/y.git", "a:b")      # it may already have landed
+    assert len(calls) == 1
+    calls.clear()
+    gitops.git(tmp_path, "fetch", "https://github.com/x/y.git", check=False)    # reading again is harmless
+    assert len(calls) == 4

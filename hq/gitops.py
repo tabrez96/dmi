@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 DEV = "develop"      # where the work happens: every ticket lands here
@@ -31,13 +32,29 @@ def child_env(env=None):
 GIT_TIMEOUT = 600     # seconds; a stalled fetch or push must not hold `_lock` forever
 
 
+# git's words for a connection that never got through: nothing reached GitHub, so trying again is safe, even a push
+NEVER_SENT = ("Failed to connect", "Couldn't connect to server", "Could not resolve host", "Connection refused")
+# a connection that broke on the way: safe to repeat for reading, but a push may already have landed
+BROKEN = NEVER_SENT + ("Connection timed out", "Connection reset by peer")
+NETWORK_COMMANDS = {"push", "fetch", "ls-remote", "pull", "clone"}
+CONNECT_TRIES, CONNECT_PAUSE = 4, 5       # a blip on the host's network: wait 5, 10, 15 seconds before giving up
+
+
 def git(cwd, *args, check=True, env=None, binary=False, stdin=None, timeout=GIT_TIMEOUT):
-    """Run git in `cwd`. `binary=True` keeps output (and `stdin`) as bytes: patches must not be decoded."""
-    try:
-        done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=not binary, check=False,
-                              input=stdin, env=child_env(env), timeout=timeout)
-    except subprocess.TimeoutExpired:
-        raise GitError(f"git {' '.join(args)}: no answer after {timeout}s") from None
+    """Run git in `cwd`. `binary=True` keeps output (and `stdin`) as bytes: patches must not be decoded. A network
+    command whose connection didn't get through is tried again a few times before it counts as failed."""
+    for attempt in range(CONNECT_TRIES):
+        try:
+            done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=not binary, check=False,
+                                  input=stdin, env=child_env(env), timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise GitError(f"git {' '.join(args)}: no answer after {timeout}s") from None
+        err = done.stderr.decode(errors="replace") if binary else done.stderr
+        safe = NEVER_SENT if args[:1] == ("push",) else BROKEN
+        if (done.returncode == 0 or not NETWORK_COMMANDS & set(args[:1]) or attempt + 1 == CONNECT_TRIES
+                or not any(sign in err for sign in safe)):
+            break
+        time.sleep(CONNECT_PAUSE * (attempt + 1))
     if check and done.returncode != 0:
         err = done.stderr.decode(errors="replace") if binary else done.stderr
         out = done.stdout.decode(errors="replace") if binary else done.stdout
