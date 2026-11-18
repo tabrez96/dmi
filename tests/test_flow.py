@@ -2,6 +2,7 @@
 
 import json
 import shutil
+import time
 
 import pytest
 from conftest import ROOT, drain, roles, scratch_product, thread
@@ -1054,6 +1055,37 @@ def test_a_ticket_from_a_chat_on_a_launched_product_builds_it_again(hq):
     proposal = hq.board.propose("jim", "ticket", {"title": "Snooze", "description": "x", "product": "nudge"})
     hq.accept_proposal(proposal)
     assert hq.board.product(pid)["state"] == policy.BUILDING
+
+
+def test_a_role_out_of_daily_runs_waits_instead_of_blocking(hq):
+    hq.cfg["roles"]["planner"]["max_runs_per_day"] = 1
+    hq.board.finish_run(hq.board.start_run("ticket", 1, "planner", "fake", "m", "/dev/null"), True)
+    tid = hq.board.create("Add export", "", policy.APPROVED, actor="pm")
+    assert hq.tick() == 0 and hq.board.get(tid)["state"] == policy.APPROVED      # waiting, not blocked
+    assert len(hq.announcements) == 1 and "planner" in hq.announcements[0]
+    hq.tick()
+    assert len(hq.announcements) == 1                                            # said once
+    hq.cfg["roles"]["planner"]["max_runs_per_day"] = 5
+    drain(hq)
+    assert hq.board.get(tid)["state"] == policy.SHIPPED
+
+
+def test_the_announced_resume_time_is_when_the_count_falls_under_the_cap(hq):
+    hq.cfg["roles"]["planner"]["max_runs_per_day"] = 2
+    now = time.time()
+    for hours_ago in (20, 10, 5):                                                # three runs against a cap of two
+        run = hq.board.start_run("ticket", 1, "planner", "fake", "m", "/dev/null")
+        hq.board.finish_run(run, True)
+        with hq.board._conn() as conn:
+            conn.execute("UPDATE runs SET started = ? WHERE id = ?", (now - hours_ago * 3600, run))
+    chat = hq.board.start_run("chat", 1, "planner", "fake", "m", "/dev/null")    # chat runs don't count
+    hq.board.finish_run(chat, True)
+    assert hq._waiting_for_runs("planner")
+    expected = time.strftime("%H:%M", time.localtime(now - 10 * 3600 + 86400))   # the 10h-old run, not the 20h one
+    assert expected in hq.announcements[-1]
+    hq.cfg["roles"]["planner"]["max_runs_per_day"] = 0
+    hq._runs_said.clear()
+    assert hq._waiting_for_runs("planner") and "until the cap is raised" in hq.announcements[-1]
 
 
 def test_an_empty_ticket_list_is_checked_against_the_brief(hq):
