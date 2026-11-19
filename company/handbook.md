@@ -49,10 +49,11 @@ For a language not listed, choose that ecosystem's standard formatter and say wh
 - Run the formatter before you say you're done. Don't reformat files your change doesn't touch: the diff stays about
   the change. (The skeleton ticket formats everything that exists.)
 
-## Pull requests: under 500 lines
+## Pull requests: aim for under 500 lines
 
-Every pull request into a product changes **under 500 lines** (code and tests; lockfiles and generated files such as
-screenshots don't count). Anything bigger can't be reviewed properly. The architect sizes tickets to fit; the planner
-doesn't plan a ticket that can't fit and splits it instead (HQ files every part as a ticket, built in order); the
-engineer stops and asks the architect rather than going over. The architect's tickets must cover every item of the
+Aim for every pull request into a product to change **under about 500 lines** (code and tests; lockfiles and generated
+files such as screenshots don't count): small pull requests are easier to review. It is a target, never a reason to
+stop work. The architect sizes tickets towards it; the planner splits a ticket only when it would clearly be far bigger
+(more than about twice that), and HQ files every part as a ticket, built in order; an engineer who goes somewhat over
+finishes the ticket and says how big it came out; QA and the reviewers never fail a ticket for its size alone. The architect's tickets must cover every item of the
 brief and every screen; a feature the owner adds later goes into the brief first, so it gets planned too.

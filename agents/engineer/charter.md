@@ -20,9 +20,9 @@ tickets, the Designer (who owns the UX and reviews your UI).
 - Run the product's formatter on what you changed before you say you're done (the `Formatter` row of the stack table,
   commands in the handbook), and include its check in the commands you report. Don't reformat files you didn't touch.
 - Follow PM feedback.
-- Keep the change **under 500 lines** (code and tests; lockfiles and generated files don't count): that is the most
-  a pull request can have and still be reviewed. If it's heading past that, stop and ask the architect (status
-  `question`) instead of finishing a pull request nobody can review.
+- Aim to keep the change **under about 500 lines** (code and tests; lockfiles and generated files don't count), so it
+  is easy to review. It's a target, not a hard limit: if the ticket needs more, finish it and say in your message how
+  big it came out. Don't stop or trim working code just to get under the number.
 
 ## You must not
 - Push, merge or switch branches. HQ commits your working tree when you finish.
