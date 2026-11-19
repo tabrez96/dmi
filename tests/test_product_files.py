@@ -32,6 +32,21 @@ def test_claudemd_has_the_product_and_fills_the_stack_and_canvas_later():
     filled = claudemd.fill_stack(text, DESIGN)
     assert "| Web | FastAPI |" in filled and claudemd.PENDING not in filled
     assert claudemd.fill_stack(filled, DESIGN) is None                  # nothing new: no change
+    formatted = filled.replace("| Web | FastAPI |", "| Web     | FastAPI   |").replace(claudemd.STACK_OPEN, claudemd.STACK_OPEN + "\n")
+    assert claudemd.fill_stack(formatted, DESIGN) is None               # a formatter's padding isn't a change either
+    regrouped = filled.replace("| Web | FastAPI |", "| Web FastAPI | |")
+    assert claudemd.fill_stack(regrouped, DESIGN)                        # words in other cells are a change
+    retyped = filled.replace("| Web | FastAPI |", "| Web | Fast-API |")
+    assert claudemd.fill_stack(retyped, DESIGN)                          # so is punctuation inside a cell
+    assert claudemd._layout_free("| a | b |\n|---|---|\n| Web | FastAPI |") == \
+        claudemd._layout_free("a | b\n--- | ---\nWeb | FastAPI")                # outer pipes are layout too
+    assert claudemd._layout_free("| Build | `printf 'a  b'` |\n|---|---|") != \
+        claudemd._layout_free("| Build | `printf 'a b'` |\n|---|---|")            # spaces in code are content
+    assert claudemd._layout_free("Use `uv` sync") != claudemd._layout_free("Use`uv`sync")   # spaces by code stay
+    assert claudemd._layout_free("Swift 6, SwiftUI,\nEventKit.") == claudemd._layout_free("Swift 6, SwiftUI, EventKit.")
+    assert claudemd._layout_free("| A | B |\n|---|---|\n| - | - |") != claudemd._layout_free("| A | B |\n|---|---|")
+    assert claudemd._layout_free("- Backend\n  - FastAPI") != claudemd._layout_free("- Backend\n- FastAPI")
+    assert claudemd._layout_free("Runtime\n>FastAPI") != claudemd._layout_free("Runtime >FastAPI")
     assert "https://claude.ai/artifact/1" in claudemd.fill_canvas(filled, "https://claude.ai/artifact/1")
     assert claudemd.fill_canvas("no markers here", "https://claude.ai/artifact/1") is None
 
