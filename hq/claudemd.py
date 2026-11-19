@@ -77,9 +77,60 @@ def fill_stack(text, design):
     if not stack or STACK_OPEN not in text or STACK_CLOSE not in text:
         return None
     head, rest = text.split(STACK_OPEN, 1)
-    _, tail = rest.split(STACK_CLOSE, 1)
+    current, tail = rest.split(STACK_CLOSE, 1)
+    if _layout_free(current) == _layout_free(stack):
+        return None          # the same stack, only laid out differently (a formatter's table padding): leave it
     new = f"{head}{STACK_OPEN}\n{stack}\n{STACK_CLOSE}{tail}"
     return new if new != text else None
+
+
+TABLE_RULE = re.compile(r":?-+:?")
+CODE_SPAN = re.compile(r"(`[^`]*`)")
+BLOCK_START = re.compile(r"(?:[-*+]|\d+[.)]|#+)\s|>")     # a list item, heading or quote starts a block of its own
+
+
+def _squash(text):
+    """Each run of spaces made one and the ends trimmed, except inside `code spans`, whose spaces are content."""
+    parts = CODE_SPAN.split(text)
+    return "".join(part if index % 2 else re.sub(r"\s+", " ", part) for index, part in enumerate(parts)).strip()
+
+
+def _cells(line):
+    return tuple(_squash(cell) for cell in line.strip().strip("|").split("|"))
+
+
+def _is_rule(line):
+    return all(TABLE_RULE.fullmatch(cell) for cell in _cells(line))
+
+
+def _layout_free(markdown):
+    """Markdown as its blocks' contents, layout taken out: a table is its rows of ordered cells (outer pipes or not,
+    its one rule row dropped), a paragraph is its soft-wrapped lines joined, runs of spaces are one. Words,
+    punctuation and the spaces inside code spans stay, so only the layout is ignored."""
+    raw = markdown.splitlines()
+    lines = [line.strip() for line in raw]
+    blocks, index = [], 0
+    while index < len(lines):
+        line = lines[index]
+        if not line:
+            index += 1
+        elif "|" in line and index + 1 < len(lines) and "|" in lines[index + 1] and _is_rule(lines[index + 1]):
+            blocks.append(_cells(line))                                        # a table: header, rule row, rows
+            index += 2
+            while index < len(lines) and "|" in lines[index]:
+                blocks.append(_cells(lines[index]))
+                index += 1
+        else:
+            depth = len(raw[index]) - len(raw[index].lstrip())               # a nested list item stays nested
+            nested = " " * depth if BLOCK_START.match(line) else ""
+            paragraph = [line]
+            index += 1
+            while index < len(lines) and lines[index] and not BLOCK_START.match(lines[index]) and not (
+                    "|" in lines[index] and index + 1 < len(lines) and _is_rule(lines[index + 1])):
+                paragraph.append(lines[index])
+                index += 1
+            blocks.append(nested + _squash(" ".join(paragraph)))
+    return blocks
 
 
 CODERABBIT = """# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
