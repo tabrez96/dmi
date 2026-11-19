@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04           # Playwright 1.57's Chromium doesn't support 26.04 yet
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3       # it publishes exact tags only, no moving v10
+      - run: uv python install 3.14
+      - name: Install headless Chromium (the design library renders screens and logos with it)
+        run: npx -y playwright@1.57.0 install --with-deps --only-shell chromium
+      - name: Run the tests
+        run: |
+          git config --global user.name "CI"
+          git config --global user.email "ci@example.invalid"
+          uv run --python 3.14 pytest -q
+
+  secrets:
+    runs-on: ubuntu-latest
+    env:
+      BETTERLEAKS_VERSION: 1.10.1
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0                  # the whole history, so a pull request's commits can be scanned
+      - name: Install Betterleaks (checksum verified)
+        run: |
+          base="https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}"
+          file="betterleaks_${BETTERLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL -o "$file" "$base/$file"
+          curl -sSfL -o checksums.txt "$base/checksums.txt"
+          grep " $file\$" checksums.txt | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/betterleaks" && tar -xzf "$file" -C "$RUNNER_TEMP/betterleaks"
+      - name: Scan for leaked secrets
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          else
+            range="${{ github.event.before }}..${{ github.sha }}"
+            git cat-file -e "${{ github.event.before }}" 2>/dev/null || range="${{ github.sha }}"
+          fi
+          "$RUNNER_TEMP/betterleaks/betterleaks" git . --redact --log-opts="--diff-merges=first-parent $range"   # merge commits too
