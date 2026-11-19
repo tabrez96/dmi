@@ -21,6 +21,12 @@ CLAUDE.md. Products are built for a broad audience, not for one person.
 - Test and sample data is invented and generic, never about the PM or their calendar, shop or team.
 - Product names are modern, short and catchy (see the analyst's charter), never "<Thing> App".
 
+## Versions: current releases
+Every product starts on the current stable release of its language, framework, database and libraries, never on an
+older major out of habit. The architect checks what is current with web tools when designing (never from
+memory), and names an older version (major, minor or patch) only when the owner asks or something in the stack
+needs it, with the reason.
+
 ## Code style: every product has an automatic formatter
 Formatting is never a matter of taste or a review comment. Every product picks the formatter for its language together
 with its stack, writes it into the stack table, and the build fails when code isn't formatted.

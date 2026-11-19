@@ -210,7 +210,9 @@ roles:
   architect:                       # product-level system design, talks with you
     harness: claude
     model: claude-opus-5-5
-    tools: [Read, Grep, Glob, Write]
+    tools: [Read, Grep, Glob, Write, Bash]    # Bash is for tools/websearch + tools/webfetch (current versions)
+    web: true
+    secrets: [BRAVE_API_KEY]       # host mode only: extra env vars this role may see
     timeout_minutes: 30
     max_usd_per_run: 4
     max_runs_per_day: 15
