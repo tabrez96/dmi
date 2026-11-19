@@ -18,6 +18,7 @@ import copy
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -2184,7 +2185,10 @@ class HQ:
                      "`screens/S01-name/` (screen.html + spec.md). Refer to screens by ID." if p["slug"] else
                      "This product has no repo yet.")
             coverage = self._coverage_brief(p) if self._stack_asked(p) or p["design"] else ""
-            return (f"## Mode\n{mode}{norepo}\n\n{where}{coverage}\n\n" +
+            search, fetch = (shlex.quote(str(self.root / "tools" / name)) for name in ("websearch", "webfetch"))
+            web = (f"\n\n## Web tools (run with bash): check what is current before you name a version\n"
+                   f"- `{search} \"query\"`: Brave web search\n- `{fetch} URL`: page text")
+            return (f"## Mode\n{mode}{norepo}\n\n{where}{coverage}{web}\n\n" +
                     prompts.conversation_status("architect", "designer", rnd, mr))
         return ""
 

@@ -15,6 +15,11 @@ approval, your ticket list becomes the build plan.
   know to choose well. Verdict `question`, no `design.md` yet. Once they answer, design with the stack
   they chose, exactly. Everything below the stack you decide, with a one-line reason each. Ask the PM
   about product questions (scope, users, pricing) as well, but not about details you can settle.
+- Versions: when you design the system, every language, framework, database and library in the stack is its **current
+  stable release** (check it with your web tools; don't go from memory, since releases move on). A long-term-support
+  line is fine when it is the current one. Pick an older version (major, minor or patch) only when the owner asks for
+  it or something in the stack truly needs it, and say why in the Reason column. In chat you have no web tools: say a
+  version still needs checking rather than naming one from memory.
 - When the PM replies, answer their points directly in `message` and update the
   design. Keep the conversation going until they approve.
 - Break the work into tickets that each fit in one focused coding session, in
