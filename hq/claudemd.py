@@ -55,9 +55,9 @@ def render(title, brief="", design="", canvas=""):
 - Two long-lived branches: `develop` is where the work lands (every ticket's PR goes there); `master` is the
   release branch and only moves when the maintainer launches a release. Never commit to `master`.
 - One ticket at a time, on its own branch (`dmi/t-<n>`), cut from `develop`. Small, focused changes.
-- Each ticket becomes a pull request into `develop` that the maintainer reviews. A pull request changes **under 500
-  lines** (code and tests; lockfiles and generated files don't count); anything bigger can't be reviewed, so split it
-  into more tickets.
+- Each ticket becomes a pull request into `develop` that the maintainer reviews. Aim for a pull request to change
+  **under about 500 lines** (code and tests; lockfiles and generated files don't count), so it's easy to review. It's
+  a target, not a hard limit: finish the work, and split it into more tickets only when it's far bigger.
 - Commit messages and pull request titles say only what the change does (`Show the running meeting under Now`): no
   ticket number and no product name.
 - Prefer boring, proven tools. Don't add a dependency unless the ticket needs it.

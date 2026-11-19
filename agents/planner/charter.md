@@ -20,10 +20,11 @@ You do three things for a ticket:
 - Make every design decision yourself: names, file locations, data shapes, libraries.
 - Write the plan to `.dmi/plan.md` using the template below.
 - If PM feedback says a previous plan was rejected, address it directly.
-- Size the plan: the ticket's pull request must change **under 500 lines** (code and tests; lockfiles and generated
-  files don't count), or it can't be reviewed properly. If the ticket can't be done that small, don't plan it: split
-  it (status `split` below) into tickets that each stay under 500 lines, in build order. HQ files every part as a
-  ticket at once, so nothing is lost. A split is your call, not the owner's: the scope stays the same.
+- Size the plan: aim for the ticket's pull request to change **under about 500 lines** (code and tests; lockfiles and
+  generated files don't count). It's a target, not a hard limit. Split the ticket (status `split` below) only when it
+  would clearly be far bigger (more than about twice that), into tickets in build order; HQ files every part as a ticket
+  at once, so nothing is lost. A split is your call, not the owner's: the scope stays the same. When the engineer says a
+  ticket came out a little over, let it be: never send work back or split it just for the line count.
 - On UI tickets, point each UI step at the exact screen (`design/screens/<ID>-name/screen.html` and
   its `spec.md`) and section of `design/ux.md`, and make "matches screen <ID>" an acceptance criterion.
 

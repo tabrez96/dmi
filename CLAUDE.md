@@ -17,6 +17,9 @@ in `products/<name>/` as **separate git repos** (git-ignored here); never commit
 - Ask before every commit, push, PR or history rewrite, showing what goes in; a yes covers that step only.
 - Changes reach `master` through a PR on its own plainly named branch (`readme-and-coderabbit`) that the PM reviews
   and merges; don't merge PRs yourself. Push to `master` directly only when the PM explicitly asks.
+- Each PR changes under 500 lines (code and tests; lockfiles and generated files don't count), here as in the
+  products: anything bigger can't be reviewed. Split a big change into a stack of PRs that each stand on their own,
+  and a big file into modules rather than one PR that adds it whole.
 - One commit per feature. Review fixes are folded into that feature's commit (then force-push the PR branch with a
   lease), never added as a separate "fix" commit.
 - Commit messages and PR titles are plain sentences ("Add the README"), no `feat:` / `docs:` / `chore:` prefixes.
@@ -30,7 +33,13 @@ in `products/<name>/` as **separate git repos** (git-ignored here); never commit
   `sudo nerdctl ps -q` shows no agent running).
 - Products are referred to by name (`dmi show nudge`); tickets are `T-<n>`; unapproved ideas are `I-<n>`.
 - Product repos: work lands on `develop` (one commit per ticket, no merge commits, one PR per ticket); `master` is
-  only moved by a launch. Commits are authored as the crew member who did the work (`Pam (Designer)`).
+  only moved by a launch. Commits are authored as the crew member who did the work (`Pam (Designer)`). Commit messages
+  and PR titles say only what the change does (`design: S01 'Now' section and Join buttons on S01-S03`): no ticket
+  number and no product name, since the repo is that product's own. Existing commits are left as they are. Each pull
+  request aims for under 500 lines (code and tests; lockfiles and generated files don't count) so it's easy to review,
+  but in the products that's a target, not a hard limit: the architect sizes tickets towards it, the planner splits a
+  ticket only when it would be far bigger (over about twice that), the engineer finishes a ticket that comes out a
+  little over and says so, and nobody fails or blocks work for its size alone.
 - **Language in anything a product contains** (briefs, specs, screen copy, README, product CLAUDE.md, code,
   commits, issues): no "PM". Products are for a broad audience. Say "you", "users", "the owner" or "the team".
   The charters and `company/handbook.md` tell the agents the same; keep them in step when you change either.
