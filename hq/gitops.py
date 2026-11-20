@@ -450,6 +450,38 @@ def replay_on_remote(repo, url, env, base, tip):
             shutil.rmtree(scratch, ignore_errors=True)
 
 
+def replay_on_develop(wt, since=None, base=DEV):
+    """Put a ticket branch's own change on top of `base` (develop), as one commit with its message and author: HQ does
+    the rebase, because agents can't rewrite git history. `since`: the commit its change starts from (an earlier,
+    already merged version of the same pull request); by default where it left `base`. -> [] when it went on cleanly
+    (or there was nothing new), else the files that clash, left in the worktree with conflict markers for the engineer.
+    The branch's previous commit is kept at refs/dmi/before-rebase/<branch>."""
+    head = git(wt, "rev-parse", "HEAD").stdout.strip()
+    branch = git(wt, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    git(wt, "update-ref", f"refs/dmi/before-rebase/{branch}", head)
+    since = since or git(wt, "merge-base", base, "HEAD").stdout.strip()
+    patch = git(wt, "diff", "--binary", since, "HEAD", binary=True).stdout
+    message = git(wt, "log", "-1", "--format=%B").stdout.strip()
+    author = git(wt, "log", "-1", "--format=%an <%ae>").stdout.strip()
+    git(wt, "reset", "--hard", "--quiet", base)
+    if not patch:
+        return []
+    try:
+        applied = git(wt, "apply", "--3way", "--whitespace=nowarn", check=False, binary=True, stdin=patch)
+        clashed = [path for path in git(wt, "diff", "--name-only", "--diff-filter=U", "-z").stdout.split("\0") if path]
+        if applied.returncode == 0 and not clashed:
+            commit_staged(wt, message, author)
+            return []
+    except GitError:                             # git itself failed: the branch goes back as it was
+        git(wt, "reset", "--hard", "--quiet", head)
+        raise
+    if not clashed:                              # nothing to resolve by hand: the branch goes back as it was
+        git(wt, "reset", "--hard", "--quiet", head)
+        return ["(the change didn't apply: " + applied.stderr.decode(errors="replace").strip()[-200:] + ")"]
+    git(wt, "reset", "--quiet")                  # the markers stay in the files; the engineer resolves them
+    return clashed
+
+
 def _base_ref(branch):
     """Where a ticket's branch started: a commit of develop at the time, kept even if develop is rewritten later."""
     return f"refs/dmi/base/{branch}"

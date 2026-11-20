@@ -1376,3 +1376,57 @@ def test_a_failure_seen_before_a_restart_still_gets_its_fix_ticket(gh_hq):
     hq.board.update_product(pid, ci_cursors=json.dumps({"Build": 500}))    # HQ stopped before filing the fix
     hq.ci_event(hook(500))
     assert len(fixes(hq, pid)) == 1
+
+
+def test_a_merge_github_refuses_is_rebased_by_hq_not_sent_to_the_engineer(gh_hq):
+    hq, pid, _bare = gh_hq
+    tid = make(hq, pid, "Add feature")
+    drain(hq)
+    from hq.github import GitHubError
+
+    def not_mergeable(*args, **kwargs):
+        raise GitHubError("GitHub PUT: 405 Pull Request is not mergeable", 405)
+    hq.github.merge_pr = not_mergeable
+    hq.act("ticket", tid, "approve")
+    assert hq.board.get(tid)["state"] == policy.READY_TO_SHIP                # rebased and pushed: no rework round
+    assert "on top of the latest develop" in hq.board.messages("ticket", tid)[-1]["body"]
+
+
+def test_a_pr_merged_during_rework_gets_only_the_new_work_in_a_new_pr(gh_hq):
+    hq, pid, bare = gh_hq
+    tid = make(hq, pid, "Add feature")
+    drain(hq)
+    head = subprocess.run(["git", "--git-dir", str(bare), "rev-parse", f"refs/heads/dmi/t-{tid}"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    hq.say_ticket(tid, "Also log it")                                     # back to the engineer...
+    subprocess.run(["git", "--git-dir", str(bare), "update-ref", "refs/pull/1/head", head], check=True)
+    hq.github.head = head
+    hq.github.merge_pr("me/cadence", 1, "Add feature")                    # ...and meanwhile merged on GitHub
+    drain(hq)
+    ticket = hq.board.get(tid)
+    assert any("merged while this was being reworked" in m["body"] for m in hq.board.messages("ticket", tid))
+    assert ticket["state"] in (policy.SHIPPED, policy.READY_TO_SHIP)
+    if ticket["state"] == policy.READY_TO_SHIP:                           # new work: a new PR with only that
+        assert ticket["pr_number"] == 2
+        ahead = subprocess.run(["git", "--git-dir", str(bare), "rev-list", f"refs/heads/develop..refs/heads/dmi/t-{tid}"],
+                               capture_output=True, text=True, check=True).stdout.split()
+        assert len(ahead) == 1
+
+
+def test_a_merged_pr_whose_new_work_hq_cant_replay_keeps_it_for_the_retry(gh_hq, monkeypatch):
+    hq, pid, bare = gh_hq
+    tid = make(hq, pid, "Add feature")
+    drain(hq)
+    head = subprocess.run(["git", "--git-dir", str(bare), "rev-parse", f"refs/heads/dmi/t-{tid}"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    hq.say_ticket(tid, "Also log it")
+    subprocess.run(["git", "--git-dir", str(bare), "update-ref", "refs/pull/1/head", head], check=True)
+    hq.github.head = head
+    hq.github.merge_pr("me/cadence", 1, "Add feature")
+
+    def broken(*args, **kwargs):
+        raise gitops.GitError("disk full")
+    monkeypatch.setattr(gitops, "replay_on_develop", broken)
+    drain(hq)
+    ticket = hq.board.get(tid)
+    assert ticket["state"] == policy.BLOCKED and ticket["pr_number"] == 1     # the retry replays from PR #1 again
