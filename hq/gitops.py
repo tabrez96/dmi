@@ -222,6 +222,33 @@ def take_changes(repo):
         return patch
 
 
+def _prefer_patch(wt, path):
+    """Merge a clashing file again, taking the patch's side (stage 3) only in the hunks that clash, and stage it. Git
+    writes the working-tree file, so its attributes (an encoding, a symlink) apply as on any checkout."""
+    stages = {}
+    for entry in git(wt, "--literal-pathspecs", "ls-files", "-u", "-z", "--", path).stdout.split("\0"):
+        if entry:
+            mode, blob, stage = entry.split("\t", 1)[0].split()
+            stages[stage] = (mode, blob)
+    merged = None
+    # added on one side only, deleted, or a symlink: the patch's version whole
+    if {"1", "2", "3"} <= stages.keys() and all(mode.startswith("100") for mode, _blob in stages.values()):
+        with tempfile.TemporaryDirectory() as scratch:
+            versions = []
+            for stage in "213":                      # ours, base, theirs: git merge-file's order
+                version = Path(scratch) / stage
+                version.write_bytes(git(wt, "cat-file", "blob", stages[stage][1], binary=True).stdout)
+                versions.append(str(version))
+            done = git(wt, "merge-file", "-p", "--theirs", *versions, check=False, binary=True)
+            merged = done.stdout if done.returncode == 0 else None      # a binary file can't be merged by lines
+    if merged is None:
+        git(wt, "--literal-pathspecs", "checkout", "--theirs", "--", path)
+        return
+    blob = git(wt, "hash-object", "-w", "--no-filters", "--stdin", binary=True, stdin=merged).stdout.decode().strip()
+    git(wt, "--literal-pathspecs", "update-index", "--cacheinfo", f"{stages['3'][0]},{blob},{path}")
+    git(wt, "--literal-pathspecs", "checkout", "--", path)
+
+
 def commit_patch(wt, patch, message, author=HQ_AUTHOR):
     """Apply a patch from take_changes in a worktree (three-way, if the branch already moved those lines) and commit
     it. Returns True if it committed; raises GitError if it doesn't apply."""
@@ -229,8 +256,14 @@ def commit_patch(wt, patch, message, author=HQ_AUTHOR):
         raise GitError(f"{wt} has uncommitted changes, so the patch wasn't applied")
     applied = git(wt, "apply", "--3way", "--whitespace=nowarn", check=False, binary=True, stdin=patch)
     if applied.returncode != 0:
-        git(wt, "reset", "--hard", "--quiet", check=False)
-        raise GitError(f"git apply: {applied.stderr.decode(errors='replace').strip()[-400:]}")
+        clashed = [path for path in git(wt, "diff", "--name-only", "--diff-filter=U", "-z").stdout.split("\0") if path]
+        if not clashed:
+            git(wt, "reset", "--hard", "--quiet", check=False)
+            raise GitError(f"git apply: {applied.stderr.decode(errors='replace').strip()[-400:]}")
+        # The branch changed those lines too (an earlier version of the same file): where they clash the patch is the
+        # newer version, and the branch's other edits in those files stay
+        for path in clashed:
+            _prefer_patch(wt, path)
     return commit_staged(wt, message, author)    # --3way staged exactly the patch; stray files (a .env) stay out
 
 

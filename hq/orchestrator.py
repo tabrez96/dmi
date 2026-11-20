@@ -1444,6 +1444,9 @@ class HQ:
         if (not self.cfg.get("github", {}).get("auto_merge", True) or t["state"] != policy.READY_TO_SHIP
                 or t.get("builder") == "designer"):            # a design is the owner's to review and merge
             return
+        if t["branch"] == gitops.HQ_BRANCH and self.board.product(t["product_id"])["state"] in (
+                policy.DESIGNING, policy.DESIGN_REVIEW, policy.TICKET_REVIEW):
+            return                                              # it holds a design the owner hasn't approved yet
         def left_for_owner():
             return any(event["kind"] == "reviews_left_for_pm" for event in self.board.events(t["id"]))
         if left_for_owner():
@@ -2457,9 +2460,12 @@ class HQ:
         if p["tickets_only"]:
             self.board.transition_product(p["id"], policy.TICKET_REVIEW, design=design, tickets_json=tickets_json,
                                           round=0, next_speaker=None, tickets_only=0)
+            if design != p["design"]:
+                self._update_design_pr(p)
             return self._ticket_gate(self.board.product(p["id"]), "Tickets revised.")
         self.board.transition_product(p["id"], policy.DESIGN_REVIEW, design=design,
                                       tickets_json=tickets_json, round=0, next_speaker=None)
+        self._update_design_pr(p)
         n = len(json.loads(tickets_json)) if tickets_json else 0
         actions = [{"id": "guidance", "label": "Reply…", "style": "secondary"},
                    {"id": "reject", "label": "Drop product", "style": "danger"}]
@@ -3020,6 +3026,18 @@ class HQ:
                                    recipient="pm", kind="escalation")
         where = f"`master` on GitHub is now at `{tag}`" if url else f"`master` is now at `{tag}`"
         self.board.post("product", pid, "hq", f"🚀 Launched. {where} (everything on `develop`).", kind="status")
+
+    def _update_design_pr(self, p):
+        """A revised design goes into HQ's open pull request, if there is one, so it shows this version, not an old one.
+        Approving the design lands it anyway, so a failure here is only logged."""
+        if not self._on_github(p):
+            return
+        with self._product_lock(p["id"]):           # _poll_setup can't make the same pull request a second ticket
+            try:
+                if self._hq_ticket(self.board.product(p["id"])):
+                    self._land_system_design(self.board.product(p["id"]))
+            except (gitops.GitError, GitHubError, OSError) as e:
+                self.say(f"!! {refs.product_ref(p)} couldn't update its open design pull request: {e}")
 
     def _land_system_design(self, p):
         """The approved system design (design/system.md) and its stack in CLAUDE.md, as one change. -> True (landed),

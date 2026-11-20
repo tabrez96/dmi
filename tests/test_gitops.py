@@ -416,3 +416,26 @@ def test_a_push_whose_connection_broke_midway_is_not_repeated(tmp_path, monkeypa
     calls.clear()
     gitops.git(tmp_path, "fetch", "https://github.com/x/y.git", check=False)    # reading again is harmless
     assert len(calls) == 4
+
+
+def test_a_patch_over_an_older_version_of_the_same_lines_wins(tmp_path):
+    repo = tmp_path / "app"
+    gitops.init_product(repo, "App")
+    middle = "".join(f"line {number}\n" for number in range(6))
+    names = ("[s] design.md", "s design.md")                  # a name that is also a pattern matching the other
+    for name in names:
+        (repo / name).write_text(f"{name}\nPython 3.12\n{middle}timeout 30\n")
+    gitops.commit_all(repo, "design")
+    worktree = tmp_path / "wt"
+    gitops.git(repo, "worktree", "add", "-q", "-b", "hq", str(worktree))
+    for name in names:
+        (worktree / name).write_text(f"{name}\nPython 3.12 and Postgres 16\n{middle}timeout 60\n")     # the open PR
+    gitops.commit_all(worktree, "first")
+    for name in names:
+        (repo / name).write_text(f"{name}\nPython 3.14 and Postgres 18\n{middle}timeout 30\n")         # the revision
+    patch = gitops.take_changes(repo)
+    assert gitops.commit_patch(worktree, patch, "revised")
+    # the clashing line takes the revision; the branch's own edit lower down stays; each file keeps its own text
+    for name in names:
+        assert (worktree / name).read_text() == f"{name}\nPython 3.14 and Postgres 18\n{middle}timeout 60\n"
+    assert not gitops.git(worktree, "status", "--porcelain").stdout
