@@ -439,3 +439,49 @@ def test_a_patch_over_an_older_version_of_the_same_lines_wins(tmp_path):
     for name in names:
         assert (worktree / name).read_text() == f"{name}\nPython 3.14 and Postgres 18\n{middle}timeout 60\n"
     assert not gitops.git(worktree, "status", "--porcelain").stdout
+
+
+def _branch_off(tmp_path, start_text):
+    repo = tmp_path / "app"
+    gitops.init_product(repo, "App")
+    (repo / "jobs.py").write_text(start_text)
+    gitops.commit_all(repo, "start")
+    _, worktree = gitops.ensure_worktree(repo, tmp_path / "work", 1)
+    return repo, worktree
+
+
+def test_hq_replays_a_ticket_on_a_develop_that_moved(tmp_path):
+    repo, worktree = _branch_off(tmp_path, "a\nb\nc\n")
+    (worktree / "jobs.py").write_text("a\nb\nc\nlock\n")
+    gitops.commit_all(worktree, "Hold the lock")
+    (repo / "other.py").write_text("x\n")
+    gitops.commit_all(repo, "elsewhere")                                    # develop moved on
+    assert gitops.replay_on_develop(worktree) == []
+    assert gitops.commits_ahead(worktree) == 1 and (worktree / "other.py").exists()
+    assert gitops.git(worktree, "log", "-1", "--format=%s").stdout.strip() == "Hold the lock"
+
+
+def test_hq_leaves_clashing_lines_marked_for_the_engineer(tmp_path):
+    repo, worktree = _branch_off(tmp_path, "a\n")
+    (worktree / "jobs.py").write_text("mine\n")
+    gitops.commit_all(worktree, "mine")
+    (repo / "jobs.py").write_text("theirs\n")
+    gitops.commit_all(repo, "theirs")
+    mine = gitops.git(worktree, "rev-parse", "HEAD").stdout.strip()
+    assert gitops.replay_on_develop(worktree) == ["jobs.py"]
+    assert "<<<<<<<" in (worktree / "jobs.py").read_text()
+    branch = gitops.git(worktree, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    assert gitops.git(worktree, "rev-parse", f"refs/dmi/before-rebase/{branch}").stdout.strip() == mine   # kept
+
+
+def test_only_whats_new_since_a_merged_version_is_replayed(tmp_path):
+    repo, worktree = _branch_off(tmp_path, "a\n")
+    (worktree / "jobs.py").write_text("feature\n")
+    gitops.commit_all(worktree, "feature")
+    merged = gitops.git(worktree, "rev-parse", "HEAD").stdout.strip()
+    (repo / "jobs.py").write_text("feature\n")
+    gitops.commit_all(repo, "feature, squash-merged")                     # develop has the first version
+    (worktree / "jobs.py").write_text("feature\nfix\n")
+    gitops.commit_all(worktree, "fix")
+    assert gitops.replay_on_develop(worktree, since=merged) == []
+    assert gitops.git(worktree, "diff", "--stat", gitops.DEV, "HEAD").stdout.count("|") == 1
