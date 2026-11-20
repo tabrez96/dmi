@@ -1323,6 +1323,36 @@ class HQ:
             made += 1
         return made
 
+    def _merged_meanwhile(self, t, slug, wt):
+        """The ticket's pull request was merged on GitHub while it was being reworked (review fixes, a comment): develop
+        already has that version. Put only what changed since on top of develop, for a new pull request; with nothing
+        new, the ticket is done. -> True when this took over (shipped, or sent back with clashes)."""
+        try:
+            if self.github.pr_state(slug, t["pr_number"]) != "merged":
+                return False
+            repo = self.repo_for(t)
+            merged = self.github.pr_head(slug, t["pr_number"])
+            gitops.git(repo, "fetch", remote_url(slug), f"+refs/pull/{t['pr_number']}/head:refs/dmi/merged/T-{t['id']}",
+                       env=self.github.git_env())
+        except (GitHubError, gitops.GitError) as e:
+            self.say(f"!! T-{t['id']} couldn't check whether PR #{t['pr_number']} merged: {e}")
+            return False
+        old = t["pr_number"]
+        self.board.update(t["id"], pr_number=None, pr_url=None, review_cursor=0, kody_cursor="", owner_cursor="")
+        self.board.post("ticket", t["id"], "hq", f"PR #{old} was merged while this was being reworked, so develop already "
+                        "has that version; only what changed since goes in a new pull request.", kind="status")
+        clashes = self._rebase_ticket(self.board.get(t["id"]), since=merged)
+        if clashes:
+            self._send_clashes(self.board.get(t["id"]), clashes, f"PR #{old} was merged while this was being reworked")
+            return True
+        if gitops.commits_ahead(wt) == 0:                      # nothing new after all: the merged version was all of it
+            fresh = self.board.get(t["id"])
+            if fresh["state"] == policy.READY_FOR_DEV:
+                self.board.transition(t["id"], policy.READY_TO_SHIP, "hq", f"PR #{old} merged")
+            self._finish_ship(self.board.get(t["id"]), f"PR #{old} merged on GitHub. ✅")
+            return True
+        return False
+
     @staticmethod
     def _pr_summary(text, limit=500):
         text = (text or "").strip()
@@ -1377,6 +1407,8 @@ class HQ:
 
     def _open_pr(self, t, report, wt, visual=None):
         slug = self._slug(t)
+        if t.get("pr_number") and self._merged_meanwhile(t, slug, wt):
+            return None
         repo, branch = self.repo_for(t), t["branch"] or gitops.branch_name(t["id"])
         url = remote_url(slug)
         closes = f"Closes #{t['issue_number']}\n\n" if t.get("issue_number") else ""
@@ -1935,22 +1967,55 @@ class HQ:
                     self.board.post("ticket", t["id"], "hq", f"GitHub didn't confirm the merge of PR #{t['pr_number']} "
                                     f"({e}). I'll check the pull request again in a minute.", kind="status")
                     return False
-                note = (f"GitHub wouldn't merge PR #{t['pr_number']} ({e}). Rebase this branch onto develop "
-                        "(`git rebase develop`) and resolve any conflicts.")
-                self.board.event(t["id"], "hq", "feedback", note=note)
-                self.board.post("ticket", t["id"], "hq", note, recipient="engineer", kind="status")
-                return self.board.transition(t["id"], policy.READY_FOR_DEV, "hq", f"merge refused: {e}")
+                clashes = self._rebase_ticket(t)
+                if not clashes:
+                    try:
+                        gitops.push(repo, remote_url(self._slug(t)), t["branch"] or gitops.branch_name(t["id"]),
+                                    self.github.git_env(), force=True)
+                        self.board.post("ticket", t["id"], "hq", f"PR #{t['pr_number']} couldn't merge ({e}), so I put it "
+                                        "on top of the latest develop and pushed it; checks and reviews run again.",
+                                        kind="status")
+                        return False                  # still ready to ship: it merges once it's green again
+                    except gitops.GitError as error:
+                        clashes = [f"(the rebased branch couldn't be pushed: {error})"]
+                return self._send_clashes(t, clashes, f"GitHub wouldn't merge PR #{t['pr_number']} ({e})")
             return self._finish_ship(t, f"PR #{t['pr_number']} merged. ✅")
         try:
             gitops.merge(repo, t["id"], self._repo_title(t), author=self._author("engineer"))
         except gitops.GitError as e:
-            note = ("Merge into develop conflicted. Rebase this branch onto develop "
-                    "(`git rebase develop`) and resolve the conflicts.")
-            self.board.event(t["id"], "hq", "feedback", note=note)
-            self.board.post("ticket", t["id"], "hq", note, recipient="engineer", kind="status")
-            self.board.transition(t["id"], policy.READY_FOR_DEV, "hq", f"merge conflict: {e}")
+            clashes = self._rebase_ticket(t)
+            if not clashes:
+                try:
+                    gitops.merge(repo, t["id"], self._repo_title(t), author=self._author("engineer"))
+                    return self._finish_ship(t, "Merged to develop. ✅")
+                except gitops.GitError as error:
+                    clashes = [f"(it still didn't merge: {error})"]
+            self._send_clashes(t, clashes, f"Merging into develop conflicted ({e})")
             return False
         return self._finish_ship(t, "Merged to develop. ✅")
+
+    def _rebase_ticket(self, t, since=None):
+        """HQ puts the ticket's change on top of the latest develop itself: agents can't rewrite git history in their
+        sandbox. `since`: an already merged version of this ticket, so only what's new is replayed. -> [] when it went
+        on cleanly, else the clashing files, left with conflict markers in the ticket's worktree."""
+        repo = self.repo_for(t)
+        try:
+            if self._slug(t):
+                gitops.sync_main(repo, remote_url(self._slug(t)), self.github.git_env())
+            _, worktree = gitops.ensure_worktree(repo, self.workdir / repo.name, t["id"], t["branch"])
+            self.board.update(t["id"], worktree=str(worktree))
+            return gitops.replay_on_develop(worktree, since)
+        except (gitops.GitError, GitHubError) as e:
+            return [f"(HQ couldn't put it on top of develop: {e})"]
+
+    def _send_clashes(self, t, clashes, why):
+        note = (f"{why}. HQ has put this ticket's change on top of the latest develop for you (don't try to rebase: you "
+                "can't, and it's done). Develop changed the same lines, so these files have conflict markers "
+                "(<<<<<<< / >>>>>>>) where both changed: " + ", ".join(f"`{name}`" for name in clashes) +
+                ". Resolve each one, keeping what both sides meant, then run the tests.")
+        self.board.event(t["id"], "hq", "feedback", note=note)
+        self.board.post("ticket", t["id"], "hq", note, recipient="engineer", kind="status")
+        return self.board.transition(t["id"], policy.READY_FOR_DEV, "hq", why)
 
     def _finish_ship(self, t, message):
         repo = self.repo_for(t)
