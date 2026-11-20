@@ -439,3 +439,16 @@ def test_a_patch_over_an_older_version_of_the_same_lines_wins(tmp_path):
     for name in names:
         assert (worktree / name).read_text() == f"{name}\nPython 3.14 and Postgres 18\n{middle}timeout 60\n"
     assert not gitops.git(worktree, "status", "--porcelain").stdout
+
+
+def test_a_file_both_sides_added_takes_the_patchs_version(tmp_path):
+    repo = tmp_path / "app"
+    gitops.init_product(repo, "App")
+    worktree = tmp_path / "wt"
+    gitops.git(repo, "worktree", "add", "-q", "-b", "hq", str(worktree))
+    (worktree / "system.md").write_text("Python 3.12\n")                       # the open PR adds it
+    gitops.commit_all(worktree, "first")
+    (repo / "system.md").write_text("Python 3.14\n")                           # so does the revision
+    assert gitops.commit_patch(worktree, gitops.take_changes(repo), "revised")
+    assert (worktree / "system.md").read_text() == "Python 3.14\n"
+    assert not gitops.git(worktree, "status", "--porcelain").stdout

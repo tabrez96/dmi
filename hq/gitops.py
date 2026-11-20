@@ -242,7 +242,11 @@ def _prefer_patch(wt, path):
             done = git(wt, "merge-file", "-p", "--theirs", *versions, check=False, binary=True)
             merged = done.stdout if done.returncode == 0 else None      # a binary file can't be merged by lines
     if merged is None:
-        git(wt, "--literal-pathspecs", "checkout", "--theirs", "--", path)
+        if "3" in stages:
+            git(wt, "--literal-pathspecs", "checkout", "--theirs", "--", path)
+            git(wt, "--literal-pathspecs", "add", "--", path)
+        else:                                        # the patch deletes it
+            git(wt, "--literal-pathspecs", "rm", "-q", "--", path)
         return
     blob = git(wt, "hash-object", "-w", "--no-filters", "--stdin", binary=True, stdin=merged).stdout.decode().strip()
     git(wt, "--literal-pathspecs", "update-index", "--cacheinfo", f"{stages['3'][0]},{blob},{path}")
