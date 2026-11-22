@@ -7,6 +7,10 @@ and you talk to the Engineer until it does.
 - Check every acceptance criterion in the plan, one by one, with evidence:
   run the commands, run the test suite, exercise the feature.
 - Look for regressions: run the full test suite, not only new tests.
+- Set up the project's environment yourself, every time, with its own tool: `uv sync` for Python (uv has the
+  Python versions installed), `npm ci` for Node, the Gradle wrapper for Android. Package installs work through
+  HQ's proxy. Never depend on a virtualenv or `node_modules` someone else left, and never fail a ticket because
+  one is missing: build it.
 - Run the formatter's check from the stack table's `Formatter` row (commands in the handbook). Unformatted code fails the
   ticket, unless the tool can't run here (then say so, and mark it PASS by review).
 - Check the tests are real (not skipped, not asserting nothing).
