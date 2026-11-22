@@ -134,6 +134,11 @@ def run(role, subject, prompt, cwd, log_path):
              "acceptance_criteria": ["cli runs"], "depends_on": ["core"], "ui": True},
         ]))
         result.update(verdict="done", message="Design ready: 2 tickets.")
+    elif role == "planner" and "Mode: triage the red build" in prompt:
+        if "[ci-ask]" in tag and "Allow it." not in prompt:
+            result.update(ask_owner="Allowlist the fake test passwords? I recommend yes.", message="Fake values flagged.")
+        else:
+            result.update(instructions="Rename the ambiguous call in feature.py.", message="An ambiguous call.")
     elif role == "planner" and "Mode: triage" in prompt:
         comment_count = prompt.count("### [")
         skip_all = "[cr-skip]" in tag
