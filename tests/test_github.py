@@ -814,7 +814,7 @@ def test_the_loop_survives_a_failing_tick(hq):
     assert not t.is_alive() and len(calls) == 2
 
 
-def test_a_red_build_on_the_pr_goes_back_to_the_engineer_with_the_error(gh_hq):
+def test_a_red_build_on_the_pr_goes_to_jim_who_instructs_the_engineer(gh_hq):
     hq, pid, _bare = gh_hq
     tid = make(hq, pid, "Add feature")
     drain(hq)
@@ -824,9 +824,13 @@ def test_a_red_build_on_the_pr_goes_back_to_the_engineer_with_the_error(gh_hq):
     hq._pr_polled = 0
     hq._poll_prs()                                                     # HQ reads the log; nobody pastes anything
     t = hq.board.get(tid)
-    assert t["state"] == policy.READY_FOR_DEV and t["ci_run"] == 7
+    assert t["state"] == policy.PR_REVIEW and t["ci_run"] == 7        # Jim first, not straight to the engineer
+    hq.tick()
+    t = hq.board.get(tid)
+    assert t["state"] == policy.READY_FOR_DEV and not t["pr_feedback"]
     said = [m for m in hq.board.messages("ticket", tid) if m["verdict"] == "build_failed"][-1]
     assert "ambiguous use of 'perform'" in said["body"] and said["recipient"] == "engineer"
+    assert said["author"] == "planner" and "Rename the ambiguous call" in said["body"]
     # the same red run is not sent twice; a newer red run is, up to the limit, then it asks you
     hq.board.update(tid, state=policy.READY_TO_SHIP)      # as if the engineer and QA had passed it again
     hq._pr_polled = 0
@@ -836,10 +840,28 @@ def test_a_red_build_on_the_pr_goes_back_to_the_engineer_with_the_error(gh_hq):
         hq.github.run = {**hq.github.run, "id": run_id}
         hq._pr_polled = 0
         hq._poll_prs()
-        if hq.board.get(tid)["state"] == policy.READY_FOR_DEV:
-            hq.board.update(tid, state=policy.READY_TO_SHIP)      # as if the engineer and QA had passed it again
+        if hq.board.get(tid)["state"] == policy.PR_REVIEW:
+            hq.board.update(tid, state=policy.READY_TO_SHIP, pr_feedback=None)   # as if fixed and passed again
     assert hq.board.get(tid)["state"] == policy.BLOCKED
     assert "still red" in hq.board.messages("ticket", tid)[-1]["body"]
+
+
+def test_jim_asks_the_owner_when_a_red_build_needs_their_call(gh_hq):
+    hq, pid, _bare = gh_hq
+    tid = make(hq, pid, "Add secret scan [ci-ask]")
+    drain(hq)
+    hq.github.run = {"id": 7, "status": "completed", "conclusion": "failure", "sha": "abc123",
+                     "url": "https://github.com/me/cadence/actions/runs/7", "name": "Test", "message": "x"}
+    hq._pr_polled = 0
+    hq._poll_prs()
+    hq.tick()
+    t = hq.board.get(tid)
+    assert t["state"] == policy.BLOCKED and "Allowlist the fake test passwords?" in hq.board.messages("ticket", tid)[-1]["body"]
+    hq.say_ticket(tid, "Allow it.")                                    # your answer goes back to Jim, not the engineer
+    assert hq.board.get(tid)["state"] == policy.PR_REVIEW
+    hq.tick()
+    assert hq.board.get(tid)["state"] == policy.READY_FOR_DEV
+    assert hq.board.messages("ticket", tid)[-1]["verdict"] == "build_failed"
 
 
 def test_a_refused_connection_to_github_is_tried_again(monkeypatch):
@@ -990,8 +1012,8 @@ def test_a_stale_lockfile_is_regenerated_by_hq_not_sent_to_the_engineer(gh_hq, m
     hq.board.update(tid, state=policy.BLOCKED)                             # a blocked ticket comes back to the ship gate
     hq.github.run = {**hq.github.run, "id": 8}
     hq.fix_pr_build(tid)
-    # nothing changed in the lockfile this time, so it is the engineer's turn after all
-    assert hq.board.get(tid)["state"] == policy.READY_FOR_DEV
+    # nothing changed in the lockfile this time, so Jim looks at it after all
+    assert hq.board.get(tid)["state"] == policy.PR_REVIEW
 
 
 def test_retrying_a_ticket_blocked_on_a_stale_lockfile_fixes_the_lockfile(gh_hq, monkeypatch):
