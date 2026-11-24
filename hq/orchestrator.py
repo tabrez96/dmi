@@ -2991,6 +2991,17 @@ class HQ:
             return self.board.product(prod["id"])
         return prod
 
+    def new_ticket(self, pid, title, description="", state=policy.APPROVED, builder=""):
+        """A ticket the owner adds to a product directly. Approved work on a launched product builds it again."""
+        if not self.board.product(pid).get("slug"):
+            raise ValueError(f"{self.board.pref(pid)} has no repo yet: its tickets come from its plan, "
+                             "once its design is approved")
+        with self._product_lock(pid):
+            tid = self.board.create(title, description, state, actor="pm", product_id=pid, builder=builder)
+            if state == policy.APPROVED:
+                self._build_again(self.board.product(pid))
+        return tid
+
     def reject(self, tid, note=None):
         t = self.board.get(tid)
         target = policy.pm_reject_target(t["state"])
@@ -3509,6 +3520,9 @@ class HQ:
 
     def file_change(self, prod, note, title="", ui=True, designer=False):
         """See _file_change. Under the product's lock (so the launch check can't miss it), and mirrored as issues."""
+        if prod["state"] not in policy.BUILT_STATES:         # still in design: notes go to its conversation instead
+            raise ValueError(f"{refs.product_ref(prod)} is {prod['state'].replace('_', ' ')}: "
+                             "a change is filed once it is building or launched")
         with self._product_lock(prod["id"]):
             tid = self._file_change(self.board.product(prod["id"]), note, title, ui, designer)
         self.sync_issues(prod["id"])

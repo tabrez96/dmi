@@ -8,7 +8,12 @@ def run(hq, monkeypatch, *argv):
 
 def test_new_files_a_ticket_and_board_lists_it(hq, monkeypatch, capsys):
     pid = hq.board.create_product("Nudge", "reminders")
+    assert run(hq, monkeypatch, "new", hq.board.pref(pid), "Add export") == 1       # an idea has no repo to build in
+    tid = hq.board.create("Old", "", policy.SHIPPED, actor="pm")
+    assert run(hq, monkeypatch, "new", f"T-{tid}", "Add export") == 1                 # a ticket isn't a product
+    hq.board.update_product(pid, slug="nudge", state=policy.LAUNCHED)
     assert run(hq, monkeypatch, "new", hq.board.pref(pid), "Add export", "--desc", "CSV") == 0
+    assert hq.board.product(pid)["state"] == policy.BUILDING                        # launched: it builds again
     assert "created (approved)" in capsys.readouterr().out
     assert run(hq, monkeypatch, "board") == 0
     assert "Add export" in capsys.readouterr().out

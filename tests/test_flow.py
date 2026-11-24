@@ -69,6 +69,9 @@ def test_a_question_while_planning_goes_back_to_planning(hq, monkeypatch):
 def test_a_ui_change_is_designed_and_approved_before_it_is_built(hq):
     pid = hq.board.create_product("Nudge: warns you before meetings")
     hq.board.update_product(pid, slug="scratch")
+    with pytest.raises(ValueError, match="once it is building"):       # still in design: no tickets yet
+        hq.file_change(hq.board.product(pid), "S01: show the meeting that is running now.")
+    hq.board.update_product(pid, state=policy.LAUNCHED)
     build = hq.file_change(hq.board.product(pid), "S01: show the meeting that is running now.")
     design = json.loads(hq.board.get(build)["depends_on"])[0]
     assert hq.board.get(design)["builder"] == "designer" and "S01: show the meeting" in hq.board.get(design)["description"]
