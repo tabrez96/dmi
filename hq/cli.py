@@ -28,8 +28,10 @@ def cmd_init(hq, a):
 
 def cmd_new(hq, a):
     state = policy.PROPOSED if a.propose else policy.APPROVED
-    pid = resolve(hq, a.product)[1]            # every ticket belongs to a product (its repo is where it's built)
-    tid = hq.board.create(a.title, a.desc or "", state, actor="pm", product_id=pid, builder="designer" if a.designer else "")
+    kind, pid = resolve(hq, a.product)         # every ticket belongs to a product (its repo is where it's built)
+    if kind != "product":
+        raise ValueError(f"{a.product!r} is a ticket, not a product")
+    tid = hq.new_ticket(pid, a.title, a.desc or "", state, builder="designer" if a.designer else "")
     hq.board.post("ticket", tid, "pm", f"New ticket: {a.title}\n\n{a.desc or ''}".strip(), kind="status")
     print(f"T-{tid} created ({state})")
 
