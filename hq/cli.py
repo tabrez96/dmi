@@ -221,6 +221,11 @@ def cmd_run(hq, a):
         print("\nHQ stopped.")
 
 
+def cmd_discord(hq, a):
+    from .discord_bot import run_bot
+    run_bot(hq, with_hq=not a.no_hq)
+
+
 def cmd_digest(hq, a):
     print(digest(hq, a.hours))
 
@@ -334,6 +339,10 @@ def main(argv=None):
     sub.add_parser("ci-webhook", help="register the GitHub webhook that reports failed builds to HQ").set_defaults(fn=cmd_ci_webhook)
     sub.add_parser("tick", help="run one pass of agent turns, then exit").set_defaults(fn=cmd_tick)
     sub.add_parser("run", help="run HQ continuously (no Discord)").set_defaults(fn=cmd_run)
+
+    s = sub.add_parser("discord", help="run the Discord bot (and HQ, unless --no-hq)")
+    s.add_argument("--no-hq", action="store_true", help="bot only; run `dmi run` separately")
+    s.set_defaults(fn=cmd_discord)
 
     s = sub.add_parser("digest", help="summary of the last N hours")
     s.add_argument("--hours", type=int, default=24)
